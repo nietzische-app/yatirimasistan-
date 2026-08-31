@@ -1,0 +1,63 @@
+# Sunucuda zaten nginx varsa paneli Caddy yerine buna tanıt.
+# Panel 127.0.0.1:8501'de dinliyor (docker-compose.yml varsayılanı).
+#
+# Kurulum:
+#   apt install -y apache2-utils
+#   htpasswd -c /etc/nginx/.htpasswd-panel admin
+#   cp deploy/nginx-panel.conf.example /etc/nginx/sites-available/panel.conf
+#   nano /etc/nginx/sites-available/panel.conf      # server_name + sertifika yolları
+#   ln -s /etc/nginx/sites-available/panel.conf /etc/nginx/sites-enabled/
+#   nginx -t && systemctl reload nginx
+#
+# Sertifikan yoksa:  apt install -y certbot python3-certbot-nginx
+#                    certbot --nginx -d panel.alanadin.com
+
+# Not: Sunucuda IPv6 kapalıysa "listen [::]..." satırlarını sil,
+# yoksa nginx "Address family not supported by protocol" hatası verir.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name panel.alanadin.com;          # <-- kendi alan adın
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    # Not: "http2 on;" yazma — nginx 1.25 öncesinde (Ubuntu 22.04/24.04 varsayılanı)
+    # geçersiz direktiftir ve nginx hiç açılmaz. Streamlit'in WebSocket'i zaten
+    # HTTP/1.1 üzerinden çalışır, HTTP/2'ye ihtiyaç yok.
+    server_name panel.alanadin.com;          # <-- kendi alan adın
+
+    # certbot bu satırları kendisi de ekleyebilir
+    ssl_certificate     /etc/letsencrypt/live/panel.alanadin.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/panel.alanadin.com/privkey.pem;
+
+    # --- Şifre koruması ---
+    auth_basic           "Yatirim Asistani Panel";
+    auth_basic_user_file /etc/nginx/.htpasswd-panel;
+
+    # Streamlit dosya yükleme kullanmıyor ama grafik verisi büyük olabilir
+    client_max_body_size 32m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8501;
+
+        # --- Streamlit'in canlı bağlantısı WebSocket üzerinden gelir.
+        # Bu üç satır olmadan panel açılır ama "Connection error" verip donar.
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket bağlantısı uzun ömürlüdür; kısa timeout panelin donmasına yol açar
+        proxy_read_timeout  86400;
+        proxy_send_timeout  86400;
+        proxy_buffering     off;
+    }
+}

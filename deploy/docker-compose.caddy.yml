@@ -9,6 +9,7 @@
 # .env içinde tanımlanması gerekenler:
 #   SITE_ADDRESS=panel.alanadin.com   # alan adın yoksa:  https://SUNUCU_IP  ya da  :80
 #   CADDY_TLS=                        # sadece IP kullanıyorsan: 'tls internal'
+#   CADDY_HTTP_PORT=80                # 80/443 doluysa başka port ver
 #   PANEL_USER=admin
 #   PANEL_PASSWORD_HASH='$2a$14$...'  # TEK TIRNAK şart (bkz. DEPLOY.md)
 #                                     # docker run --rm caddy:2-alpine caddy hash-password
@@ -21,8 +22,12 @@ services:
     depends_on:
       - dashboard
     ports:
-      - "80:80"
-      - "443:443"
+      # Sunucuda 80/443'ü başka bir servis kullanıyorsa .env içinden değiştir:
+      #   CADDY_HTTP_PORT=8080
+      #   CADDY_HTTPS_PORT=8443
+      # (Let's Encrypt sertifikası için HTTPS portu 443 olmalıdır.)
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
       CADDY_TLS: ${CADDY_TLS:-}

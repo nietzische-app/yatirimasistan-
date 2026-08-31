@@ -212,6 +212,52 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml up -d --
 > Çıktıdaki `$$` işaretleri normaldir (Compose'un kaçış biçimi); hash'in tamamı
 > görünüyorsa doğrudur. `setup-caddy.sh` bu kontrolü senin için yapar.
 
+#### Sunucuda zaten bir web sunucusu varsa (80/443 dolu)
+
+Kurulum şu hatayı verirse sunucuda başka bir servis o portu tutuyordur:
+
+```
+Error response from daemon: ... Bind for 0.0.0.0:80 failed: port is already allocated
+```
+
+Kimin tuttuğunu gör:
+
+```bash
+ss -tlnp | grep -E ':80 |:443 '
+docker ps --format '{{.Names}}\t{{.Ports}}'
+```
+
+`setup-caddy.sh` bu çakışmayı kendisi fark eder ve boş bir port önerir, ama
+doğru çözüm ne bulduğuna bağlı:
+
+| Ne çalışıyor | Ne yapmalı |
+|---|---|
+| **nginx / apache / traefik** gibi bir ters vekil sunucu | İkinci bir vekil sunucu çalıştırma. Paneli mevcut olana tanıt (aşağıdaki örnek). |
+| Alakasız bir uygulama (80'i kullanan başka bir container vb.) | Scripti çalıştır; Caddy'yi 443 + boş bir HTTP portuyla kurar. |
+| 443 de dolu | Mevcut vekil sunucuya ekle; script bu durumda alan adı modunu reddeder. |
+
+**Mevcut nginx'e eklemek (önerilen yol).** Panel zaten `127.0.0.1:8501`
+adresinde dinliyor, yani Caddy'ye hiç gerek yok:
+
+```bash
+# Şifre dosyası
+apt install -y apache2-utils
+htpasswd -c /etc/nginx/.htpasswd-panel admin      # şifreyi sorar
+
+# Site tanımı
+cp deploy/nginx-panel.conf.example /etc/nginx/sites-available/panel.conf
+nano /etc/nginx/sites-available/panel.conf        # server_name ve sertifika yollarını düzenle
+ln -s /etc/nginx/sites-available/panel.conf /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+```
+
+Örnek dosya `deploy/nginx-panel.conf.example` içinde; Streamlit'in WebSocket
+bağlantısı için gereken `Upgrade`/`Connection` başlıkları ve uzun
+`proxy_read_timeout` değeri ayarlanmış durumda — bunlar olmadan panel açılır
+ama "Connection error" verip donar.
+
+Bu yolda Caddy'yi hiç başlatma; sade `docker compose up -d` yeterli.
+
 #### Kurulumdan sonra
 
 ```bash
@@ -357,6 +403,8 @@ API anahtarını üretirken **sadece "Spot & Margin Trading"** yetkisi ver, para
 | Belirti | Kontrol / Çözüm |
 |---|---|
 | `docker compose up` build'de takılıyor | `docker compose build --no-cache` |
+| `Bind for 0.0.0.0:80 failed: port is already allocated` | Başka bir servis 80'i tutuyor. `ss -tlnp \| grep ':80 '` ile bak; yukarıdaki "Sunucuda zaten bir web sunucusu varsa" bölümünü uygula. |
+| Panel açılıyor ama "Connection error" verip donuyor | Ters vekil sunucu WebSocket'i geçirmiyor. nginx'te `Upgrade`/`Connection` başlıklarını ve `proxy_read_timeout 86400;` satırını ekle. |
 | Panel açılmıyor | `docker compose ps` → `dashboard` "running (healthy)" mi? `docker compose logs dashboard` |
 | Bot işlem yapmıyor | Panelde **Başlat**'a bastın mı? `docker compose logs -f bot` ile RSI/EMA değerlerine bak — sinyal koşulu oluşmamış olabilir. |
 | `NetworkError` / `HTTP 451` | Binance API sunucunun bulunduğu ülkede engelli olabilir. Hetzner Almanya lokasyonu genelde sorunsuzdur; değilse `EXCHANGE_ID=binanceus` veya başka bir borsa dene. |

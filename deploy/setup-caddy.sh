@@ -42,6 +42,55 @@ set_env() {
   mv "$tmp" "$ENV_FILE"
 }
 
+# --- Bir portu kim tutuyor? (boşsa çıktı yok, dönüş 1) --------------------
+# Sırayla: docker -> ss -> netstat -> lsof -> bind denemesi.
+port_owner() {
+  local port="$1" out
+
+  # 1) Docker container'ı mı yayınlıyor? (en anlaşılır cevap)
+  out="$(docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null \
+         | awk -v p=":${port}->" 'index($0, p) { print $1; exit }')"
+  if [ -n "$out" ]; then printf 'docker container "%s"' "$out"; return 0; fi
+
+  # 2) Süreç adını verebilen araçlar
+  if command -v ss >/dev/null 2>&1; then
+    out="$(ss -tlnp 2>/dev/null | awk -v p=":${port}\$" '$4 ~ p { print; exit }' \
+           | grep -o '"[^"]*"' | head -1 | tr -d '"')"
+  elif command -v netstat >/dev/null 2>&1; then
+    out="$(netstat -tlnp 2>/dev/null | awk -v p=":${port}\$" '$4 ~ p { print $NF; exit }' \
+           | cut -d/ -f2)"
+  elif command -v lsof >/dev/null 2>&1; then
+    out="$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN -F c 2>/dev/null \
+           | awk '/^c/ { print substr($0, 2); exit }')"
+  fi
+  if [ -n "${out:-}" ]; then printf '%s' "$out"; return 0; fi
+
+  # 3) Hiçbir araç yoksa: porta bağlanmayı dene
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$port" <<'PYEOF' && return 1 || { printf 'bilinmeyen bir servis'; return 0; }
+import socket, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("0.0.0.0", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)      # port dolu
+finally:
+    s.close()
+PYEOF
+  fi
+  return 1
+}
+
+port_busy() { port_owner "$1" >/dev/null; }
+
+# Verilen adaylardan ilk boş portu yaz
+first_free_port() {
+  local p
+  for p in "$@"; do port_busy "$p" || { printf '%s' "$p"; return 0; }; done
+  return 1
+}
+
 # --- Ön kontroller ---
 command -v docker >/dev/null || { red "docker bulunamadı. Önce DEPLOY.md bölüm 2'yi uygula."; exit 1; }
 docker compose version >/dev/null 2>&1 || { red "docker compose eklentisi yok. DEPLOY.md bölüm 2."; exit 1; }
@@ -81,6 +130,74 @@ case "$MODE" in
   *) red "Geçersiz seçim."; exit 1 ;;
 esac
 
+# --- Port çakışması kontrolü -------------------------------------------------
+# Sunucuda başka bir web sunucusu (nginx, apache, başka bir Docker yığını...)
+# 80/443'ü kullanıyorsa Caddy başlayamaz:
+#   "Bind for 0.0.0.0:80 failed: port is already allocated"
+# Compose her iki portu da yayınladığı için ikisini de kontrol etmek gerekir.
+CADDY_HTTP_PORT=80
+CADDY_HTTPS_PORT=443
+
+# Panele erişilecek asıl port moda göre değişir
+if [ "$MODE" = "3" ]; then PRIMARY=http; else PRIMARY=https; fi
+
+# --- 1) Asıl port ---
+if [ "$PRIMARY" = "https" ] && OWNER="$(port_owner 443)"; then
+  if [ "$MODE" = "1" ]; then
+    red "443 portunu $OWNER kullanıyor."
+    red "Let's Encrypt sertifikası 443 üzerinden doğrulanır; bu port başka bir"
+    red "servisteyken alan adı modu kurulamaz."
+    echo
+    echo "Seçeneklerin:"
+    echo "  * O servis bir ters vekil sunucu ise (nginx/apache/traefik), ikinci bir"
+    echo "    vekil sunucu çalıştırma; paneli ona tanıt."
+    echo "    -> DEPLOY.md 'Sunucuda zaten bir web sunucusu varsa' bölümü"
+    echo "       (hazır örnek: deploy/nginx-panel.conf.example)"
+    echo "  * Ya da bu scripti 2. modla (IP + self-signed) çalıştır; farklı bir port seçer."
+    exit 1
+  fi
+  ALT="$(first_free_port 8443 9443 10443 || true)"
+  read -rp "443 portunu $OWNER kullanıyor. Panel hangi portta olsun? [${ALT:-8443}]: " ANS
+  CADDY_HTTPS_PORT="${ANS:-${ALT:-8443}}"
+  URL="${URL}:${CADDY_HTTPS_PORT}"
+  PORTS="$CADDY_HTTPS_PORT"
+elif [ "$PRIMARY" = "http" ] && OWNER="$(port_owner 80)"; then
+  ALT="$(first_free_port 8080 9080 10080 || true)"
+  read -rp "80 portunu $OWNER kullanıyor. Panel hangi portta olsun? [${ALT:-8080}]: " ANS
+  CADDY_HTTP_PORT="${ANS:-${ALT:-8080}}"
+  URL="${URL}:${CADDY_HTTP_PORT}"
+  PORTS="$CADDY_HTTP_PORT"
+fi
+
+# --- 2) İkincil port (Compose onu da yayınlar; dolu olması kurulumu bozar) ---
+if [ "$PRIMARY" = "https" ]; then
+  # 80 sadece http->https yönlendirmesi için; taşınabilir.
+  if OWNER="$(port_owner "$CADDY_HTTP_PORT")"; then
+    ALT="$(first_free_port 8080 9080 10080 18080 || true)"
+    if [ -z "$ALT" ]; then
+      read -rp "80 portunu $OWNER kullanıyor, alternatif bulunamadı. Hangi port? [18080]: " ALT
+      ALT="${ALT:-18080}"
+    fi
+    CADDY_HTTP_PORT="$ALT"
+    [ "$MODE" = "1" ] && PORTS="443"
+    echo "Not: 80 portunu $OWNER kullanıyor; Caddy onun yerine $CADDY_HTTP_PORT portunu alacak."
+    echo "     Sonuç: http:// adresi otomatik https:// ye yönlenmez; adresi https:// ile yaz."
+    [ "$MODE" = "1" ] && echo "     Sertifika 443 üzerinden (TLS-ALPN) alınacağı için bu sorun olmaz."
+  fi
+else
+  # Mod 3'te HTTPS portu kullanılmaz ama Compose yine de yayınlar.
+  if OWNER="$(port_owner "$CADDY_HTTPS_PORT")"; then
+    ALT="$(first_free_port 8443 9443 10443 18443 || true)"
+    if [ -z "$ALT" ]; then
+      read -rp "443 portunu $OWNER kullanıyor, alternatif bulunamadı. Hangi port? [18443]: " ALT
+      ALT="${ALT:-18443}"
+    fi
+    CADDY_HTTPS_PORT="$ALT"
+    echo "Not: 443 portunu $OWNER kullanıyor; Caddy o eşlemeyi $CADDY_HTTPS_PORT üzerinden yapacak"
+    echo "     (bu modda kullanılmıyor, sadece çakışmayı önlemek için)."
+  fi
+fi
+
 read -rp "Panel kullanıcı adı [admin]: " PANEL_USER
 PANEL_USER="${PANEL_USER:-admin}"
 
@@ -102,6 +219,8 @@ esac
 set_env SITE_ADDRESS "$SITE_ADDRESS"
 set_env CADDY_TLS "'$CADDY_TLS'"
 set_env PANEL_USER "$PANEL_USER"
+set_env CADDY_HTTP_PORT "$CADDY_HTTP_PORT"
+set_env CADDY_HTTPS_PORT "$CADDY_HTTPS_PORT"
 set_env PANEL_PASSWORD_HASH "'$HASH'"
 chmod 600 "$ENV_FILE"
 grn ".env güncellendi (izinler 600)"

@@ -28,6 +28,7 @@ kontrol paneli.
 │   ├── setup-caddy.sh             # panele şifre + HTTPS kurar (tek komut)
 │   ├── docker-compose.caddy.yml   # şifre + HTTPS ile yayınlama (opsiyonel)
 │   ├── docker-compose.public.yml  # 8501'i doğrudan açma (opsiyonel)
+│   ├── nginx-panel.conf.example   # sunucuda zaten nginx varsa
 │   └── Caddyfile
 ├── .env.example              # Gerçek moda geçerken kullanılacak şablon
 ├── data/                     # SQLite veritabanı buraya yazılır (git'e girmez)
