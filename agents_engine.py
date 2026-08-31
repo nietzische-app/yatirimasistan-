@@ -167,32 +167,55 @@ def classify_error(message: str) -> Optional[str]:
     return None
 
 
-def openrouter_credit() -> Optional[dict]:
-    """
-    OpenRouter anahtarının kredi durumu (kullanılan / limit).
-    En iyi çaba: uç nokta değişirse veya ağ yoksa sessizce None döner.
-    """
+def _openrouter_get(path: str) -> Optional[dict]:
+    """OpenRouter API'sinden JSON okur; hata olursa sessizce None."""
     if "openrouter" not in (config.LLM_BACKEND_URL or "") or not config.LLM_API_KEY:
         return None
     try:
         import json as _json
         import urllib.request
         req = urllib.request.Request(
-            "https://openrouter.ai/api/v1/key",
+            f"https://openrouter.ai/api/v1/{path}",
             headers={"Authorization": f"Bearer {config.LLM_API_KEY}"})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = _json.loads(resp.read()).get("data", {})
-        usage, limit = data.get("usage"), data.get("limit")
-        return {
-            "usage": float(usage) if usage is not None else None,
-            "limit": float(limit) if limit is not None else None,
-            "remaining": (float(limit) - float(usage))
-                         if (limit is not None and usage is not None) else None,
-            "free_tier": data.get("is_free_tier"),
-        }
+            return _json.loads(resp.read()).get("data", {})
     except Exception as exc:
-        log.debug("OpenRouter kredi bilgisi alınamadı: %s", exc)
+        log.debug("OpenRouter %s okunamadı: %s", path, exc)
         return None
+
+
+def openrouter_credit() -> Optional[dict]:
+    """
+    Kredi durumu. İki ayrı bilgi var, ikisi de önemli:
+      * HESAP bakiyesi (/credits)  -> 402'nin gerçek sebebi burasıdır
+      * ANAHTAR limiti (/key)      -> anahtara özel harcama tavanı (olmayabilir)
+    En iyi çaba: uç nokta değişirse veya ağ yoksa None döner.
+    """
+    def _f(d, k):
+        v = (d or {}).get(k)
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    account = _openrouter_get("credits")
+    key = _openrouter_get("key")
+    if account is None and key is None:
+        return None
+
+    total, used = _f(account, "total_credits"), _f(account, "total_usage")
+    out = {
+        "account_balance": (total - used) if (total is not None and used is not None) else None,
+        "account_total": total,
+        "account_used": used,
+        "key_usage": _f(key, "usage"),
+        "key_limit": _f(key, "limit"),
+        "free_tier": (key or {}).get("is_free_tier"),
+    }
+    out["key_remaining"] = ((out["key_limit"] - out["key_usage"])
+                            if (out["key_limit"] is not None and out["key_usage"] is not None)
+                            else None)
+    return out
 
 
 # ==========================================================================

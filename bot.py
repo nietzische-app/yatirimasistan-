@@ -589,11 +589,19 @@ def print_status() -> None:
               f"günde en fazla {config.AGENT_MAX_RUNS_PER_DAY}")
         print(f"    ├─ bugünkü koşu  : {db.agent_runs_today()}")
         credit = agents_engine.openrouter_credit()
-        if credit and credit.get("remaining") is not None:
-            print(f"    └─ OpenRouter    : kalan {credit['remaining']:.2f} $ "
-                  f"(kullanılan {credit['usage']:.2f} / limit {credit['limit']:.2f})")
-        elif credit:
-            print(f"    └─ OpenRouter    : kullanılan {credit['usage']:.2f} $ (limitsiz anahtar)")
+        if credit:
+            bal = credit.get("account_balance")
+            if bal is not None:
+                warn = "  ⚠️ KREDİ BİTMİŞ" if bal <= 0.01 else ""
+                print(f"    ├─ hesap bakiye  : {bal:.2f} $ "
+                      f"(yüklenen {credit['account_total']:.2f}, "
+                      f"harcanan {credit['account_used']:.2f}){warn}")
+            elif credit.get("account_used") is not None:
+                print(f"    ├─ hesap harcama : {credit['account_used']:.2f} $")
+            if credit.get("key_remaining") is not None:
+                print(f"    └─ anahtar limiti: kalan {credit['key_remaining']:.2f} $")
+            else:
+                print(f"    └─ anahtar limiti: yok (harcama {credit.get('key_usage') or 0:.2f} $)")
         else:
             print(f"    └─ OpenRouter    : kredi bilgisi okunamadı")
 
