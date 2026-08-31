@@ -18,6 +18,7 @@ kontrol paneli.
 .
 ├── app.py                    # Streamlit web paneli (arayüz + kontrol düğmeleri)
 ├── bot.py                    # Ticaret motoru: veri çekme, indikatör, al/sat kararı
+├── backtest.py               # Stratejiyi geçmiş veride sınama + parametre taraması
 ├── database.py               # SQLite katmanı: bakiye, pozisyon, işlem, equity, log
 ├── config.py                 # Tüm ayarlar (ortam değişkeniyle de ezilebilir)
 ├── requirements.txt
@@ -37,6 +38,7 @@ kontrol paneli.
 ├── data/                     # SQLite veritabanı buraya yazılır (git'e girmez)
 └── tests/
     ├── test_strategy.py      # Strateji + PnL + veritabanı testleri (internet gerekmez)
+    ├── test_backtest.py      # Backtest motoru testleri
     └── test_dashboard.py     # Paneli gerçekten çalıştıran render testi
 ```
 
@@ -150,6 +152,53 @@ Bu yüzden EMA, `config.EMA_TIMEFRAME` ile ayrı bir zaman diliminden hesaplanı
 EMA_TIMEFRAME = "15m"        # aynı seride EMA20 (pratikte sinyal üretmez)
 EMA_TOLERANCE_PCT = 0.01     # veya toleransla: fiyat EMA'nın %1 altına kadar kabul
 ```
+
+---
+
+## 🔬 Backtest — stratejiyi geçmişte sınamak
+
+Canlı deneme ayda tek haneli işlem üretir; "bu strateji kârlı mı?" sorusu için
+yüzlerce işlem gerekir. Backtest bunu saniyeler içinde verir.
+
+```bash
+python backtest.py --download --days 730   # geçmiş veriyi indir (bir kez, ~5 dk)
+python backtest.py                         # config.py ayarlarıyla koş
+python backtest.py --rsi-buy 25 --tp 0.03  # parametre değiştirerek koş
+python backtest.py --sweep --split 0.7     # parametre taraması + aşırı-uydurma testi
+python backtest.py --demo-data             # internetsiz, sentetik veriyle dene
+```
+
+İndikatör hesapları `bot.py`'den **aynen** kullanılır; yani burada test ettiğin
+strateji canlıda çalışanın ta kendisidir. Komisyon muhasebesi de birebir aynı:
+%2 kâr al işlemi cebe `+%1.796`, %1.5 stop işlemi `-%1.697` bırakır.
+
+### Rapor neyi söyler
+
+| Satır | Anlamı |
+|---|---|
+| **AL-TUT getirisi** | Parayı hiç dokunmadan tutsaydın ne olurdu. Botun asıl rakibi bu. |
+| **Kazanma oranı** | %2/%1.5 + komisyonla **başa baş oran %48.6**. Altı erime demek. |
+| **Kâr faktörü** | Toplam kazanç ÷ toplam kayıp. 1'in altı zarar. |
+| **Maks. düşüş** | Tepe noktadan en dip noktaya kayıp. Gerçek parada dayanabileceğin sayı. |
+| **En uzun kayıp serisi** | Üst üste kaç kez kaybettiğin. Psikolojik dayanma sınırın. |
+
+### Aşırı-uydurma (overfitting) tuzağı
+
+`--sweep` yüzlerce kombinasyon dener ve en iyisini bulur — ama geçmişte en iyi
+olan, gelecekte iyi olacak demek değildir. Yeterince parametre denersen rastgele
+veride bile "harika" bir kombinasyon bulunur.
+
+`--split 0.7` bunu yakalar: parametreleri verinin ilk %70'inde seçer, sonra
+**hiç görmediği** son %30'da sınar. `test_getiri_%` sütunu bu ikinci dönemden
+gelir. Seçim verisinde parlayıp testte çöken satırlar aşırı-uydurmadır; sadece
+her iki dönemde de kârlı olanlar dikkate değer.
+
+### Modelin varsayımları
+
+* Aynı mumda hem kâr al hem stop seviyesine değilmişse **kötümser** davranır: stop varsayar.
+* Giriş, sinyalin oluştuğu mumun **açılışında** yapılır (canlı bot mum kapanışından ~30 sn sonra tepki verir).
+* Trend EMA'sı 15 dakikalık seriden günlüğe indirgenerek hesaplanır ve **önceki günün** değeri kullanılır — hiçbir mumda geleceğe ait bilgi yoktur.
+* Emir kayması (slippage) varsayılan 0'dır; gerçekçi olmak için `--slippage 0.0005` ekleyebilirsin.
 
 ---
 

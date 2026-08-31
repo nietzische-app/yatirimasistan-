@@ -5,6 +5,7 @@ venv/
 env/
 .env
 data/*.db
+data/history/
 data/*.db-wal
 data/*.db-shm
 .streamlit/secrets.toml
