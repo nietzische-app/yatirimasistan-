@@ -111,8 +111,18 @@ MENU
 read -rp "Seçim [1-4]: " MODE
 
 ask_ip() {
-  local d
-  d="$(curl -fsS --max-time 10 https://ifconfig.me 2>/dev/null || true)"
+  local d=""
+  # 1) Sunucunun kendi arayüzündeki IP (Hetzner'de bu zaten genel IP'dir)
+  if command -v ip >/dev/null 2>&1; then
+    d="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
+  fi
+  # 2) Doğrulama/yedek: dış servisler (NAT arkasındaysan doğrusunu bunlar verir)
+  if [ -z "$d" ]; then
+    for u in https://ifconfig.me https://api.ipify.org https://icanhazip.com; do
+      d="$(curl -fsS --max-time 8 "$u" 2>/dev/null | tr -d '[:space:]')"
+      [ -n "$d" ] && break
+    done
+  fi
   read -rp "Sunucunun genel IP'si [${d:-}]: " IP
   IP="${IP:-$d}"
   [ -n "$IP" ] || { red "IP boş olamaz."; exit 1; }

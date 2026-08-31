@@ -96,6 +96,25 @@ MENU
 read -rp "Seçim [1-3]: " ADDR_MODE
 SITE_TLS=""
 
+# Sunucunun genel IP'sini tespit edip varsayılan olarak öner
+ask_ip() {
+  local d=""
+  # 1) Sunucunun kendi arayüzündeki IP (Hetzner'de bu zaten genel IP'dir)
+  if command -v ip >/dev/null 2>&1; then
+    d="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
+  fi
+  # 2) Doğrulama/yedek: dış servisler (NAT arkasındaysan doğrusunu bunlar verir)
+  if [ -z "$d" ]; then
+    for u in https://ifconfig.me https://api.ipify.org https://icanhazip.com; do
+      d="$(curl -fsS --max-time 8 "$u" 2>/dev/null | tr -d '[:space:]')"
+      [ -n "$d" ] && break
+    done
+  fi
+  read -rp "Sunucunun genel IP'si [${d:-}]: " IP
+  IP="${IP:-$d}"
+  [ -n "$IP" ] || { red "IP boş olamaz."; exit 1; }
+}
+
 case "$ADDR_MODE" in
   1)
     read -rp "Alan adı (örn. panel.alanadin.com): " PANEL_DOMAIN
@@ -103,10 +122,7 @@ case "$ADDR_MODE" in
     SITE_ADDR="$PANEL_DOMAIN"
     ;;
   2)
-    DEFAULT_IP="$(curl -fsS --max-time 10 https://ifconfig.me 2>/dev/null || true)"
-    read -rp "Sunucunun genel IP'si [${DEFAULT_IP:-}]: " IP
-    IP="${IP:-$DEFAULT_IP}"
-    [ -n "$IP" ] || { red "IP boş olamaz."; exit 1; }
+    ask_ip
     case "$IP" in
       *[!0-9.]*|"") red "Geçerli bir IPv4 adresi gir (ör. 5.9.1.2)."; exit 1 ;;
     esac
@@ -116,8 +132,7 @@ case "$ADDR_MODE" in
     echo "(sslip.io bu adı $IP adresine çözer; ayrıca bir DNS kaydı gerekmez.)"
     ;;
   3)
-    read -rp "Sunucunun genel IP'si: " IP
-    [ -n "$IP" ] || { red "IP boş olamaz."; exit 1; }
+    ask_ip
     PANEL_DOMAIN="$IP"
     SITE_ADDR="https://$IP"
     SITE_TLS=$'\n\ttls internal'
