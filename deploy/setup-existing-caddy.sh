@@ -234,6 +234,21 @@ esac
 BACKUP="${CADDYFILE_HOST}.bak-$(date +%Y%m%d-%H%M%S)"
 cp "$CADDYFILE_HOST" "$BACKUP"
 grn "Yedek alındı: $BACKUP"
+
+# Bu scriptin daha önce eklediği blok varsa (ör. farklı bir adresle denenmişse)
+# önce onu çıkar; yoksa Caddyfile'da ölü bloklar birikir.
+if grep -q '^# --- Yatirim Asistani paneli (yatirimasistan-) ---$' "$CADDYFILE_HOST"; then
+  echo "Önceki panel bloğu bulundu, yenisiyle değiştiriliyor."
+  TMP_CF="$(mktemp)"
+  awk '
+    /^# --- Yatirim Asistani paneli \(yatirimasistan-\) ---$/ { skip = 1; next }
+    skip && /^}/ { skip = 0; next }
+    !skip
+  ' "$CADDYFILE_HOST" > "$TMP_CF"
+  cat "$TMP_CF" > "$CADDYFILE_HOST"      # mount edilmiş dosyanın inode'u korunsun
+  rm -f "$TMP_CF"
+fi
+
 cat "$SNIPPET_FILE" >> "$CADDYFILE_HOST"
 rm -f "$SNIPPET_FILE"
 
