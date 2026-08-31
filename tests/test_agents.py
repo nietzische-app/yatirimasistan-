@@ -197,6 +197,11 @@ assert "havuz" in _short and len(_short) < 160, _short
 print("✓ sağlayıcı hatası okunur özete indirgeniyor")
 
 # --- 8) Maliyet sınırları ----------------------------------------------------
+# 7c bloğu agent_runs'ı temizlediği için buradaki varsayımı yeniden kur:
+# BTC/USDT için AZ ÖNCE başarılı bir toplantı yapılmış olsun.
+_r = _db.start_agent_run("BTC/USDT", 100.0)
+_db.finish_agent_run(_r, status="OK", rating="Hold", action="HOLD", duration_sec=10.0)
+
 _iv = config.AGENT_INTERVAL_MINUTES
 config.AGENT_INTERVAL_MINUTES = 60
 assert not ae.AgentCouncil.due("BTC/USDT"), "az önce toplandı, tekrar toplanmamalı"
