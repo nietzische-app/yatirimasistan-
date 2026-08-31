@@ -1,0 +1,17 @@
+.git/
+.gitignore
+.venv/
+venv/
+env/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+.streamlit/secrets.toml
+.idea/
+.vscode/
+*.png

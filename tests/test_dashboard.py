@@ -26,6 +26,28 @@ for _suffix in ("", "-wal", "-shm"):
 
 from streamlit.testing.v1 import AppTest
 
+import threading
+
+import config
+import streamlit as st
+
+
+def bot_thread_alive() -> bool:
+    return any(t.name == "bot-runner" and t.is_alive() for t in threading.enumerate())
+
+
+# 0) İZLEYİCİ MODU (Docker Compose kurulumu): panel kendi motorunu başlatmamalı
+config.RUN_BOT_IN_DASHBOARD = False
+at = AppTest.from_file(APP, default_timeout=90).run()
+assert not at.exception, at.exception
+assert not bot_thread_alive(), "izleyici modunda motor thread'i başlatılmamalı"
+assert not [b for b in at.button if "Tara" in b.label], \
+    "izleyici modunda 'Şimdi Tara' düğmesi gösterilmemeli (mükerrer emir riski)"
+print("✓ izleyici modu: panel motoru çalıştırmıyor, tarama düğmesi gizli")
+
+config.RUN_BOT_IN_DASHBOARD = True
+st.cache_resource.clear()
+
 # 1) Boş veritabanıyla ilk açılış
 at = AppTest.from_file(APP, default_timeout=90).run()
 assert not at.exception, at.exception

@@ -1,0 +1,14 @@
+# ---------------------------------------------------------------------------
+# Paneli doğrudan internete açar (8501 portu, ŞİFRESİZ).
+#
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.public.yml up -d
+#
+# ⚠️ Bu dosyayı kullanırsan panelin URL'sini bulan HERKES botu durdurabilir,
+#    başlatabilir ve bakiyeyi sıfırlayabilir. Sadece Hetzner Cloud Firewall ile
+#    kendi IP'ni whitelist'lediysen kullan. Şifreli erişim için
+#    deploy/docker-compose.caddy.yml dosyasını tercih et.
+# ---------------------------------------------------------------------------
+services:
+  dashboard:
+    ports: !override
+      - "8501:8501"

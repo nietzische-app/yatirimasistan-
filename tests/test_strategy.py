@@ -137,6 +137,19 @@ config.COOLDOWN_MINUTES = 0
 assert bot._in_cooldown("BTC/USDT") is False
 print("✓ cooldown")
 
+# --- 9b) Aynı pozisyon iki kez kapatılamaz (bot + panel aynı anda denerse) ---
+db.reset_account(); feed(closes, daily)
+bot.process_symbol("BTC/USDT")
+p3 = db.get_open_positions("BTC/USDT")[0]
+db.close_position(p3["id"], 150.0, "ilk kapatma")
+try:
+    db.close_position(p3["id"], 150.0, "ikinci kapatma")
+    raise SystemExit("HATA: pozisyon iki kez kapatıldı!")
+except ValueError:
+    pass
+assert len(db.get_trades()) == 1, "mükerrer işlem kaydı oluştu"
+print("✓ mükerrer kapatma engellendi (çok süreçli kurulum için)")
+
 # --- 10) İstatistikler / equity / sıfırlama ---
 bot.snapshot_equity(force=True)
 stats = db.get_stats({"BTC/USDT": 160.0, "ETH/USDT": 160.0})

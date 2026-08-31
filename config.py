@@ -123,6 +123,13 @@ APP_TITLE = _env_str("APP_TITLE", "Yatırım Asistanı · Paper Trading")
 DASHBOARD_REFRESH_SECONDS = _env_int("DASHBOARD_REFRESH_SECONDS", 10)
 DASHBOARD_AUTO_REFRESH = _env_bool("DASHBOARD_AUTO_REFRESH", True)
 
+# Ticaret motoru panelin İÇİNDE bir arka plan thread'i olarak çalışsın mı?
+#   True  -> tek başına `streamlit run app.py` yeterli (yerel kullanım)
+#   False -> motor ayrı bir süreçte/container'da (`python bot.py`); panel sadece izler.
+# Docker Compose kurulumunda panel container'ı bunu false yapar ki iki süreç
+# aynı anda emir açıp mükerrer pozisyon yaratmasın.
+RUN_BOT_IN_DASHBOARD = _env_bool("RUN_BOT_IN_DASHBOARD", True)
+
 
 def summary() -> dict:
     """Arayüzde göstermek için özet ayar sözlüğü."""
@@ -138,4 +145,5 @@ def summary() -> dict:
         "Pozisyon büyüklüğü": f"%{POSITION_SIZE_PCT * 100:g} (maks {MAX_POSITION_USDT:,.0f} {QUOTE_CURRENCY})",
         "Komisyon": f"%{FEE_RATE * 100:g}",
         "Döngü": f"{LOOP_INTERVAL_SECONDS} sn",
+        "Motor": "panel içinde" if RUN_BOT_IN_DASHBOARD else "ayrı süreç (bot.py)",
     }

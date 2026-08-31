@@ -1,0 +1,37 @@
+# ---------------------------------------------------------------------------
+# Paneli Caddy arkasında, kullanıcı adı/şifre ve (alan adın varsa) otomatik
+# HTTPS ile yayınlar.
+#
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml up -d
+#
+# .env içinde tanımlanması gerekenler:
+#   SITE_ADDRESS=panel.alanadin.com   # alan adın yoksa:  :80
+#   PANEL_USER=admin
+#   PANEL_PASSWORD_HASH='$2a$14$...'  # TEK TIRNAK şart (bkz. DEPLOY.md)
+#                                     # docker run --rm caddy:2-alpine caddy hash-password
+# ---------------------------------------------------------------------------
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: yatirimasistan-caddy
+    restart: always
+    depends_on:
+      - dashboard
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      PANEL_USER: ${PANEL_USER:-admin}
+      PANEL_PASSWORD_HASH: ${PANEL_PASSWORD_HASH:?deploy/README icin sifre hash gerekli}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+volumes:
+  caddy-data:
+  caddy-config:

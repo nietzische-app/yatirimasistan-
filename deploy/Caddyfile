@@ -1,0 +1,15 @@
+# Alan adı verilirse Caddy sertifikayı otomatik alır (Let's Encrypt).
+# Alan adın yoksa .env içinde SITE_ADDRESS=:80 yaz (şifre var ama trafik şifresiz).
+{$SITE_ADDRESS} {
+	basic_auth {
+		{$PANEL_USER} {$PANEL_PASSWORD_HASH}
+	}
+
+	# Streamlit WebSocket kullanır; Caddy upgrade'i kendiliğinden geçirir.
+	reverse_proxy dashboard:8501
+
+	encode gzip
+	log {
+		output stdout
+	}
+}

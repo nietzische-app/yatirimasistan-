@@ -21,7 +21,7 @@ import streamlit as st
 
 import config
 import database as db
-from bot import BotRunner, MarketData
+from bot import BotRunner, MarketData, TradingBot
 
 try:
     import plotly.graph_objects as go
@@ -77,12 +77,27 @@ FULL = {"width": "stretch"} if _ST_VERSION >= (1, 49) else {"use_container_width
 # KAYNAKLAR (tek sefer kurulur, tüm rerun'larda paylaşılır)
 # ==========================================================================
 @st.cache_resource(show_spinner=False)
-def bootstrap() -> BotRunner:
-    """Veritabanını hazırlar ve arka plan bot thread'ini başlatır."""
+def bootstrap() -> BotRunner | None:
+    """
+    Veritabanını hazırlar; motor panelin içinde çalışacaksa arka plan
+    thread'ini başlatır.
+
+    config.RUN_BOT_IN_DASHBOARD=False ise (Docker Compose kurulumu) motor
+    ayrı bir container'da döner ve panel yalnızca izleyici olur — böylece
+    iki süreç aynı anda emir açıp mükerrer pozisyon yaratmaz.
+    """
     db.init_db()
+    if not config.RUN_BOT_IN_DASHBOARD:
+        return None
     runner = BotRunner()
     runner.start()
     return runner
+
+
+@st.cache_resource(show_spinner=False)
+def get_executor() -> TradingBot:
+    """Panelden elle yapılan işlemler (pozisyon kapatma) için tek örnek."""
+    return TradingBot()
 
 
 @st.cache_resource(show_spinner=False)
@@ -228,17 +243,19 @@ with st.sidebar:
             db.set_bot_running(False)
             st.rerun()
 
-    if st.button("🔄 Şimdi Tara (tek tur)", **FULL):
-        with st.spinner("Piyasa taranıyor..."):
-            try:
-                if runner.bot is None:
-                    from bot import TradingBot
-                    runner.bot = TradingBot()
-                runner.bot.run_once()
-                runner.bot.snapshot_equity(force=True)
-                st.success("Tarama tamamlandı.")
-            except Exception as exc:
-                st.error(f"Tarama hatası: {exc}")
+    if runner is not None:
+        if st.button("🔄 Şimdi Tara (tek tur)", **FULL):
+            with st.spinner("Piyasa taranıyor..."):
+                try:
+                    if runner.bot is None:
+                        runner.bot = TradingBot()
+                    runner.bot.run_once()
+                    runner.bot.snapshot_equity(force=True)
+                    st.success("Tarama tamamlandı.")
+                except Exception as exc:
+                    st.error(f"Tarama hatası: {exc}")
+    else:
+        st.caption("🛠️ Motor ayrı bir süreçte çalışıyor (bot.py). Panel yalnızca izler.")
 
     st.divider()
     st.markdown("#### 💣 Sıfırlama")
@@ -365,10 +382,7 @@ with left:
                 pos = labels[choice]
                 price = float(prices.get(pos["symbol"]) or pos["entry_price"])
                 try:
-                    if runner.bot is None:
-                        from bot import TradingBot
-                        runner.bot = TradingBot()
-                    trade = runner.bot.close_trade(pos, price, "Manuel kapatma")
+                    trade = get_executor().close_trade(pos, price, "Manuel kapatma")
                     st.success(f"Kapatıldı. PnL: {trade['pnl']:+,.2f} {config.QUOTE_CURRENCY}")
                     time.sleep(1)
                     st.rerun()

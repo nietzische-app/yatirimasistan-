@@ -264,12 +264,17 @@ def close_position(position_id: int, exit_price: float, exit_reason: str = "") -
     ensure_db()
     with _LOCK:
         with get_connection() as conn:
-            pos = conn.execute(
-                "SELECT * FROM positions WHERE id = ? AND status = 'OPEN'", (position_id,)
-            ).fetchone()
-            if pos is None:
+            # Pozisyonu ÖNCE atomik olarak sahiplen. Bot süreci ile panelden
+            # yapılan manuel kapatma aynı anda denerse ikincisi 0 satır günceller
+            # ve hata alır; böylece aynı pozisyon iki kez kapatılamaz.
+            claimed = conn.execute(
+                "UPDATE positions SET status = 'CLOSED' WHERE id = ? AND status = 'OPEN'",
+                (position_id,),
+            )
+            if claimed.rowcount == 0:
                 raise ValueError(f"Açık pozisyon bulunamadı (id={position_id})")
 
+            pos = conn.execute("SELECT * FROM positions WHERE id = ?", (position_id,)).fetchone()
             amount = float(pos["amount"])
             entry_price = float(pos["entry_price"])
             cost = float(pos["cost"])
@@ -288,7 +293,6 @@ def close_position(position_id: int, exit_price: float, exit_reason: str = "") -
             new_balance = balance + net_proceeds
             now = utcnow()
 
-            conn.execute("UPDATE positions SET status = 'CLOSED' WHERE id = ?", (position_id,))
             conn.execute(
                 "UPDATE account SET balance = ?, updated_at = ? WHERE id = 1",
                 (new_balance, now),

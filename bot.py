@@ -404,8 +404,9 @@ class TradingBot:
             while True:
                 if force or db.is_bot_running():
                     self.run_once()
-                else:
-                    db.set_state("heartbeat", db.utcnow())
+                # Panelin "motor ayakta mı?" göstergesi: her turda yazılır,
+                # bot duraklatılmış olsa bile.
+                db.set_state("heartbeat", db.utcnow())
                 time.sleep(config.LOOP_INTERVAL_SECONDS)
         except KeyboardInterrupt:
             log.info("Kullanıcı durdurdu.")

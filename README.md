@@ -21,6 +21,13 @@ kontrol paneli.
 ├── database.py               # SQLite katmanı: bakiye, pozisyon, işlem, equity, log
 ├── config.py                 # Tüm ayarlar (ortam değişkeniyle de ezilebilir)
 ├── requirements.txt
+├── Dockerfile                # Tek imaj: hem motor hem panel
+├── docker-compose.yml        # bot + dashboard servisleri, kalıcı volume
+├── DEPLOY.md                 # Hetzner VPS dağıtım rehberi (adım adım)
+├── deploy/
+│   ├── docker-compose.caddy.yml   # şifre + HTTPS ile yayınlama (opsiyonel)
+│   ├── docker-compose.public.yml  # 8501'i doğrudan açma (opsiyonel)
+│   └── Caddyfile
 ├── .env.example              # Gerçek moda geçerken kullanılacak şablon
 ├── data/                     # SQLite veritabanı buraya yazılır (git'e girmez)
 └── tests/
@@ -71,6 +78,17 @@ streamlit run app.py
 
 İkisi aynı SQLite dosyasını (`data/trading.db`) paylaşır. Panelden Başlat/Durdur
 düğmesi ayrı terminaldeki botu da kontrol eder.
+
+### Yol 3 — Docker (sunucuda 7/24)
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+ssh -L 8501:localhost:8501 root@SUNUCU_IP   # panele eriş: http://localhost:8501
+```
+
+Hetzner VPS'e sıfırdan kurulum, firewall ve yedekleme adımları için:
+**[DEPLOY.md](DEPLOY.md)**
 
 ### Faydalı komutlar
 

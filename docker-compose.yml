@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# Kullanım:
+#   cp .env.example .env      # (zorunlu — compose bu dosyayı okur)
+#   docker compose up -d --build
+#   docker compose logs -f
+#
+# İki servis aynı imajı ve aynı SQLite veritabanını (named volume) paylaşır:
+#   bot        -> piyasayı tarar, al/sat kararını verir            (arayüz yok)
+#   dashboard  -> Streamlit paneli, 8501 portunda                  (sadece izler+kontrol eder)
+#
+# GÜVENLİK NOTU: aşağıdaki `ports` satırı paneli 127.0.0.1'e bağlar, yani
+# panel yalnızca sunucunun kendi içinden erişilebilir (SSH tüneli ile bağlanılır).
+# Paneli internete açmak istiyorsan DEPLOY.md'deki "Paneli dışarı açma"
+# bölümünü oku — şifresiz bir panel, botunu herkesin durdurup sıfırlayabilmesi
+# demektir.
+# ---------------------------------------------------------------------------
+
+# Proje adı sabitlenir; volume adı: yatirimasistan_trading-data
+name: yatirimasistan
+
+services:
+  bot:
+    build: .
+    image: yatirimasistan:latest
+    container_name: yatirimasistan-bot
+    restart: always
+    command: ["python", "bot.py"]
+    env_file:
+      # .env yoksa da açılsın (Compose v2.24+). Ayarları .env ile vermek istersen:
+      #   cp .env.example .env
+      - path: .env
+        required: false
+    environment:
+      TZ: ${TZ:-Europe/Istanbul}
+      DB_PATH: /app/data/trading.db
+    volumes:
+      - trading-data:/app/data
+    healthcheck:
+      disable: true          # bu servis HTTP sunmuyor; imajdaki kontrolü kapat
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  dashboard:
+    build: .
+    image: yatirimasistan:latest
+    container_name: yatirimasistan-panel
+    restart: always
+    depends_on:
+      - bot
+    env_file:
+      # .env yoksa da açılsın (Compose v2.24+). Ayarları .env ile vermek istersen:
+      #   cp .env.example .env
+      - path: .env
+        required: false
+    environment:
+      TZ: ${TZ:-Europe/Istanbul}
+      DB_PATH: /app/data/trading.db
+      # Motor `bot` servisinde çalışıyor; panel kendi içinde ikinci bir motor
+      # ÇALIŞTIRMAMALI, yoksa aynı sinyalde iki kez pozisyon açılır.
+      RUN_BOT_IN_DASHBOARD: "false"
+    ports:
+      # Sadece sunucu içinden erişim (önerilen). İnternete açmak için: "8501:8501"
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - trading-data:/app/data
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+volumes:
+  # Container silinse bile veritabanı burada kalır.
+  # Yedek almak için:
+  #   docker run --rm -v yatirimasistan_trading-data:/d -v $PWD:/b \
+  #     alpine tar czf /b/yedek.tgz -C /d .
+  trading-data:
