@@ -155,15 +155,38 @@ case "$HASH" in \$2*) ;; *) red "Hash üretilemedi: $HASH"; exit 1 ;; esac
 bold "Panel container'ı $PROXY_NETWORK ağına bağlanıyor..."
 "${COMPOSE[@]}" up -d
 
-bold "Caddy paneli görebiliyor mu?"
-if docker exec "$PROXY_CONTAINER" sh -c \
-     "wget -qO- http://${PANEL_CONTAINER}:8501/_stcore/health 2>/dev/null || \
-      curl -fsS http://${PANEL_CONTAINER}:8501/_stcore/health 2>/dev/null" | grep -q ok; then
-  grn "Evet: $PROXY_CONTAINER -> $PANEL_CONTAINER:8501 erişimi çalışıyor."
+# Streamlit'in ayağa kalkması ~10 sn sürer; tek seferlik kontrol erken kalır.
+bold "Caddy paneli görebiliyor mu? (panelin açılması bekleniyor)"
+REACHABLE=0
+for i in $(seq 1 20); do
+  if docker exec "$PROXY_CONTAINER" sh -c \
+       "wget -qO- http://${PANEL_CONTAINER}:8501/_stcore/health 2>/dev/null || \
+        curl -fsS http://${PANEL_CONTAINER}:8501/_stcore/health 2>/dev/null" 2>/dev/null | grep -q ok; then
+    REACHABLE=1
+    break
+  fi
+  printf '.'
+  sleep 3
+done
+echo
+if [ "$REACHABLE" = "1" ]; then
+  grn "Evet: $PROXY_CONTAINER -> $PANEL_CONTAINER:8501 erişimi çalışıyor (${i}. denemede)."
 else
-  red "Hayır. $PROXY_CONTAINER container'ı $PANEL_CONTAINER:8501 adresine ulaşamıyor."
-  echo "Kontrol:  docker inspect $PANEL_CONTAINER --format '{{json .NetworkSettings.Networks}}'"
-  echo "Yine de aşağıdaki bloğu ekleyebilirsin ama önce bu erişimi düzelt."
+  red "Hayır: $PROXY_CONTAINER container'ı 60 saniye boyunca $PANEL_CONTAINER:8501"
+  red "adresine ulaşamadı."
+  echo
+  echo "Sırayla şunlara bak:"
+  echo "  1) Panel ayakta mı?    docker compose ps"
+  echo "     Panel logu:         docker compose logs --tail=30 dashboard"
+  echo "  2) Aynı ağda mı?"
+  echo "     docker inspect $PANEL_CONTAINER --format '{{range \$k,\$v := .NetworkSettings.Networks}}{{\$k}} {{end}}'"
+  echo "     docker inspect $PROXY_CONTAINER --format '{{range \$k,\$v := .NetworkSettings.Networks}}{{\$k}} {{end}}'"
+  echo "     İkisinde de '$PROXY_NETWORK' görünmeli."
+  echo "  3) İsim çözülüyor mu?"
+  echo "     docker exec $PROXY_CONTAINER nslookup $PANEL_CONTAINER"
+  echo
+  echo "Bloğu yine de ekleyebilirsin: blok doğru, erişim düzelince Caddy'yi"
+  echo "yeniden yüklemeye bile gerek kalmaz (upstream her istekte çözülür)."
 fi
 
 # --- 5) Caddyfile bloğu -----------------------------------------------------
