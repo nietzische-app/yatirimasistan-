@@ -74,6 +74,9 @@ cd yatirimasistan-
 
 # Kod şu an feature branch'inde; main'e merge etmediysen:
 git checkout claude/binance-paper-trading-bot-70l7jm
+
+# TradingAgents submodule'ünü indir (ZORUNLU — imaj bunsuz build olmaz)
+git submodule update --init --recursive
 ```
 
 > Repo private ise: GitHub'da bir **deploy key** oluştur
@@ -452,6 +455,9 @@ API anahtarını üretirken **sadece "Spot & Margin Trading"** yetkisi ver, para
 | Belirti | Kontrol / Çözüm |
 |---|---|
 | `docker compose up` build'de takılıyor | `docker compose build --no-cache` |
+| Build'de `trading_agents` bulunamıyor | `git submodule update --init --recursive` çalıştır |
+| Panelde "Kurul devre dışı: LLM anahtarı yok" | `.env` içine `OPENROUTER_API_KEY` ekle, `docker compose up -d` |
+| Kurul hep ERROR veriyor | `docker compose logs bot \| grep -i agent` — çoğunlukla kota (429) veya model adı hatası |
 | `Bind for 0.0.0.0:80 failed: port is already allocated` | Başka bir servis 80'i tutuyor. `ss -tlnp \| grep ':80 '` ile bak; yukarıdaki "Sunucuda zaten bir web sunucusu varsa" bölümünü uygula. |
 | Panel açılıyor ama "Connection error" verip donuyor | Ters vekil sunucu WebSocket'i geçirmiyor. nginx'te `Upgrade`/`Connection` başlıklarını ve `proxy_read_timeout 86400;` satırını ekle. |
 | Panel açılmıyor | `docker compose ps` → `dashboard` "running (healthy)" mi? `docker compose logs dashboard` |

@@ -22,6 +22,12 @@ RUN apt-get update \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# TradingAgents çoklu ajan kurulu (git submodule olarak geliyor).
+# Ayrı katman: proje kodu değişince langchain/langgraph yeniden kurulmasın.
+# NOT: build'den önce sunucuda `git submodule update --init --recursive` gerekir.
+COPY trading_agents/ ./trading_agents/
+RUN pip install --no-cache-dir ./trading_agents
+
 COPY . .
 
 # root olmayan kullanıcı + veritabanı klasörü (named volume bu izinleri devralır)

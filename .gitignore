@@ -6,6 +6,9 @@ env/
 .env
 data/*.db
 data/history/
+data/agents_cache/
+data/agents_logs/
+data/agents_memory/
 data/*.db-wal
 data/*.db-shm
 .streamlit/secrets.toml

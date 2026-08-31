@@ -6,7 +6,7 @@ kontrol paneli.
 
 * **Sanal bakiye:** 10.000 USDT (ayarlanabilir)
 * **Takip:** BTC/USDT ve ETH/USDT, 15 dakikalık mumlar
-* **Strateji:** 15m RSI(14) diple + 20 günlük EMA trend filtresi → AL; %2 kâr al / %1.5 stop / RSI>70 → SAT
+* **Karar motoru:** [TradingAgents](https://github.com/TauricResearch/TradingAgents) çoklu yapay zekâ ajanı kurulu (Analist → Araştırmacı tartışması → Trader → Risk Kurulu)
 * **Panel:** metrikler, açık pozisyonlar, işlem geçmişi, equity curve, Başlat/Durdur/Sıfırla düğmeleri
 * **Gerçek hesaba geçiş:** `config.py` içinde tek satır — `DEMO_MODE = False`
 
@@ -18,7 +18,9 @@ kontrol paneli.
 .
 ├── app.py                    # Streamlit web paneli (arayüz + kontrol düğmeleri)
 ├── bot.py                    # Ticaret motoru: veri çekme, indikatör, al/sat kararı
-├── backtest.py               # Stratejiyi geçmiş veride sınama + parametre taraması
+├── agents_engine.py          # TradingAgents kurulunu çalıştırır, kararı ve raporları yazar
+├── trading_agents/           # TradingAgents reposu (git submodule, Apache-2.0)
+├── backtest.py               # RSI/EMA taban çizgisini geçmiş veride sınama
 ├── database.py               # SQLite katmanı: bakiye, pozisyon, işlem, equity, log
 ├── config.py                 # Tüm ayarlar (ortam değişkeniyle de ezilebilir)
 ├── requirements.txt
@@ -37,7 +39,8 @@ kontrol paneli.
 ├── .env.example              # Gerçek moda geçerken kullanılacak şablon
 ├── data/                     # SQLite veritabanı buraya yazılır (git'e girmez)
 └── tests/
-    ├── test_strategy.py      # Strateji + PnL + veritabanı testleri (internet gerekmez)
+    ├── test_execution.py     # Pozisyon/PnL/koruma testleri (internet gerekmez)
+    ├── test_agents.py        # Kurul entegrasyonu (LLM anahtarı gerekmez, sahte kurul)
     ├── test_backtest.py      # Backtest motoru testleri
     └── test_dashboard.py     # Paneli gerçekten çalıştıran render testi
 ```
@@ -115,7 +118,67 @@ python tests/test_strategy.py && python tests/test_dashboard.py   # testler
 
 ---
 
-## 🧠 Strateji
+## 🧠 Karar Motoru: TradingAgents Kurulu
+
+Al/sat kararını artık indikatör kuralları değil, bir **yapay zekâ kurulu** verir.
+[TradingAgents](https://github.com/TauricResearch/TradingAgents) (Apache-2.0)
+`trading_agents/` altında git submodule olarak gelir.
+
+```
+Market · Social · News · Fundamentals analistleri
+        ↓ raporlar
+🐂 Boğa  ↔  🐻 Ayı araştırmacı tartışması  (N tur)
+        ↓ Araştırma Müdürünün hükmü
+💼 Trader önerisi (giriş, stop-loss, büyüklük)
+        ↓
+🛡️ Risk Kurulu: Agresif ↔ Muhafazakâr ↔ Nötr  (N tur)
+        ↓ Risk Yöneticisinin onay/ret gerekçesi
+Nihai not: Buy / Overweight / Hold / Underweight / Sell
+```
+
+Not → emir eşlemesi: **Buy** tam pozisyon, **Overweight** yarım, **Hold** bekle,
+**Sell/Underweight** varsa pozisyonu kapat. Stop-loss'u ajanlar önerir; öneri
+fiyatın %0.5–%15 altında değilse yok sayılıp `config.STOP_LOSS_PCT` kullanılır.
+
+### İki hızlı/yavaş katman
+
+| Katman | Sıklık | Ne yapar | Maliyet |
+|---|---|---|---|
+| **Uygulama** (`bot.py`) | 30 sn | fiyat takibi, açık pozisyonun TP/SL koruması, kurulun bekleyen kararlarını emre çevirme | sıfır |
+| **Kurul** (`agents_engine.py`) | 60 dk / sembol | ajanlar toplanır, tartışır, karar verir | LLM çağrıları |
+
+Kurul **arka planda** çalışır; toplantı dakikalarca sürse bile pozisyon koruması
+kesintiye uğramaz.
+
+### 💸 Maliyet uyarısı — bunu okumadan açma
+
+Bir toplantı onlarca LLM çağrısıdır. 30 saniyede bir çalıştırmak günde binlerce
+dolar demektir. Bu yüzden üç fren var:
+
+| Fren | Varsayılan | Ne yapar |
+|---|---|---|
+| `AGENT_INTERVAL_MINUTES` | 60 | Sembol başına toplantı sıklığı. **Alt sınır 15 dk**, kod bunu zorlar. |
+| `AGENT_MAX_RUNS_PER_DAY` | 60 | Günlük toplam toplantı tavanı; aşılınca kurul toplanmaz. |
+| `AGENT_RUN_TIMEOUT_SECONDS` | 1200 | Takılan toplantı iptal edilir. |
+
+Ucuz bir modelle başla (`deepseek/deepseek-chat`), maliyeti birkaç gün izle,
+sonra `LLM_DEEP_MODEL`'i güçlendir.
+
+### Kurul çalışmıyorsa ne olur
+
+LLM anahtarı yoksa, kota dolduysa veya toplantı hata alırsa: **sistem çökmez.**
+Yeni pozisyon açılmaz, açık pozisyonların TP/SL koruması çalışmaya devam eder,
+hata panelde "Başarısız toplantılar" altında görünür.
+
+### RSI/EMA nereye gitti
+
+`bot.py`'deki al-sat kuralları **kaldırıldı**. İndikatörler yalnızca iki yerde
+kaldı: panelde gösterilen piyasa görüntüsü ve `backtest.py`. Backtest artık bir
+**taban çizgisi**: kurul, basit RSI/EMA kuralını yenebiliyor mu sorusunun ölçüsü.
+
+---
+
+## 📊 Taban Çizgisi: RSI/EMA Stratejisi (backtest için)
 
 | Aşama | Koşul |
 |---|---|

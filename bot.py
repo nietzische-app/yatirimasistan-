@@ -3,12 +3,18 @@ bot.py
 ------
 Paper trading motoru.
 
-Strateji (config.py'den ayarlanır):
-    GİRİŞ  : 15m RSI(14) < 30  VE  fiyat > 20 GÜNLÜK EMA     -> AL (LONG)
-    ÇIKIŞ  : +%2 kâr al  |  -%1.5 zarar kes  |  15m RSI > 70 -> SAT
+Karar mekanizması: TradingAgents çoklu ajan kurulu (agents_engine.py).
+Basit RSI/EMA al-sat kuralları KALDIRILMIŞTIR; indikatörler yalnızca panelde
+gösterilen piyasa görüntüsü ve backtest için hesaplanır, karar vermez.
 
-Not: RSI sinyal zaman diliminde (config.TIMEFRAME, varsayılan 15m),
-EMA trend zaman diliminde (config.EMA_TIMEFRAME, varsayılan 1d) hesaplanır.
+İki hızlı/yavaş katman:
+    HIZLI (30 sn)  : fiyat takibi, açık pozisyonların TP/SL kontrolü,
+                     kurulun verdiği bekleyen kararların uygulanması
+    YAVAŞ (60 dk)  : kurul toplanır (arka planda, hızlı döngüyü bloklamaz)
+
+Kurul kararı: Buy/Overweight -> AL, Sell/Underweight -> SAT, Hold -> BEKLE.
+Pozisyon büyüklüğü nota göre ölçeklenir; stop-loss ajan önerirse ondan,
+yoksa config.STOP_LOSS_PCT'ten alınır.
 
 Çalıştırma
     python bot.py              # sürekli döngü (panelden Başlat/Durdur ile kontrol edilir)
@@ -29,6 +35,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+import agents_engine
 import config
 import database as db
 
@@ -183,6 +190,11 @@ class TradingBot:
         self.market = MarketData()
         self._last_equity_snapshot = 0.0
         self._trend_cache: dict[str, tuple[float, Optional[float]]] = {}
+        self._council_threads: dict[str, threading.Thread] = {}
+        self.council = agents_engine.get_council()
+        ok, reason = agents_engine.AgentCouncil.readiness()
+        log.info("Karar motoru: %s", "TradingAgents kurulu" if ok else f"KAPALI — {reason}")
+        db.set_state("decision_engine", "agents" if ok else f"kapalı: {reason}")
         mode = "DEMO (sanal para)" if config.DEMO_MODE else "GERÇEK EMİR"
         if config.OFFLINE_SIMULATION:
             mode += " · OFFLINE SİMÜLASYON"
@@ -227,9 +239,11 @@ class TradingBot:
         return {"price": price, "amount": filled, "fee": fee}
 
     # ------------------------------------------------------------- AL / SAT
-    def open_trade(self, symbol: str, price: float, rsi: float, ema: float) -> Optional[int]:
+    def open_trade(self, symbol: str, price: float, size_factor: float = 1.0,
+                   stop_price: Optional[float] = None, reason: str = "") -> Optional[int]:
+        """Kurul AL dediğinde pozisyon açar. `size_factor` nota göre ölçek (0-1)."""
         balance = db.get_balance()
-        budget = self._position_size(balance)
+        budget = self._position_size(balance) * max(0.0, min(1.0, size_factor))
         if budget < config.MIN_POSITION_USDT:
             log.info("[%s] Bakiye yetersiz (%.2f), alım atlandı.", symbol, balance)
             return None
@@ -249,14 +263,15 @@ class TradingBot:
             amount = (budget - entry_fee) / entry_price
 
         take_profit = entry_price * (1 + config.TAKE_PROFIT_PCT)
-        stop_loss = entry_price * (1 - config.STOP_LOSS_PCT)
-        reason = (f"RSI {rsi:.1f} < {config.RSI_BUY_THRESHOLD:g} ve fiyat "
-                  f"EMA{config.EMA_PERIOD}({config.EMA_TIMEFRAME}) üstünde")
+        # Stop: ajanların önerisi geçerliyse o, değilse config'teki sabit oran
+        stop_loss = stop_price if stop_price else entry_price * (1 - config.STOP_LOSS_PCT)
+        market = db.get_market().get(symbol, {})
 
         pos_id = db.open_position(
             symbol=symbol, amount=amount, entry_price=entry_price, cost=budget,
             entry_fee=entry_fee, take_profit=take_profit, stop_loss=stop_loss,
-            entry_rsi=rsi, entry_ema=ema, entry_reason=reason, is_demo=config.DEMO_MODE,
+            entry_rsi=market.get("rsi"), entry_ema=market.get("ema"),
+            entry_reason=reason or "Kurul kararı", is_demo=config.DEMO_MODE,
         )
         msg = (f"AL  {symbol} | {amount:.6f} @ {entry_price:,.2f} "
                f"(~{budget:,.2f} {config.QUOTE_CURRENCY}) | TP {take_profit:,.2f} / SL {stop_loss:,.2f} | {reason}")
@@ -299,43 +314,82 @@ class TradingBot:
         self._trend_cache[symbol] = (time.time(), value)
         return value
 
-    # ------------------------------------------------------------- strateji
-    def check_exit(self, position: dict, price: float, rsi: Optional[float]) -> Optional[str]:
-        """Pozisyon kapatılmalı mı? Kapatılacaksa sebebi döner."""
+    # ---------------------------------------------------- pozisyon koruması
+    def check_exit(self, position: dict, price: float) -> Optional[str]:
+        """
+        Açık pozisyonun korumaları. Bu bir al-sat stratejisi değil, risk
+        yönetimidir: kâr hedefi ve stop seviyesi pozisyon açılırken sabitlenir
+        (stop'u kurul önerdiyse ondan gelir).
+        """
         if price >= float(position["take_profit"]):
             return f"KÂR AL (%{config.TAKE_PROFIT_PCT * 100:g})"
         if price <= float(position["stop_loss"]):
-            return f"STOP-LOSS (%{config.STOP_LOSS_PCT * 100:g})"
-        if rsi is not None and rsi > config.RSI_SELL_THRESHOLD:
-            return f"RSI {rsi:.1f} > {config.RSI_SELL_THRESHOLD:g}"
+            return "STOP-LOSS"
         return None
 
-    def check_entry(self, symbol: str, price: float, rsi: Optional[float],
-                    ema: Optional[float]) -> bool:
-        if rsi is None or ema is None:
-            return False
-        if db.has_open_position(symbol):
-            return False
-        if len(db.get_open_positions()) >= config.MAX_OPEN_POSITIONS:
-            return False
-        if self._in_cooldown(symbol):
-            return False
-        trend_ok = price > ema * (1 - config.EMA_TOLERANCE_PCT)
-        return rsi < config.RSI_BUY_THRESHOLD and trend_ok
+    # -------------------------------------------------------- kurul kararı
+    def maybe_convene(self, symbol: str, price: float) -> None:
+        """Zamanı geldiyse kurulu ARKA PLANDA toplar; hızlı döngü beklemez."""
+        if config.DECISION_ENGINE != "agents":
+            return
+        thread = self._council_threads.get(symbol)
+        if thread is not None and thread.is_alive():
+            return                              # bu sembol için toplantı sürüyor
+        if not agents_engine.AgentCouncil.due(symbol):
+            return
+        ok, reason = agents_engine.AgentCouncil.readiness()
+        if not ok:
+            return
+
+        def _run():
+            try:
+                self.council.analyze(symbol, price)
+            except Exception as exc:
+                log.exception("[%s] kurul çalıştırılamadı: %s", symbol, exc)
+                db.add_log("ERROR", f"{symbol}: kurul çalıştırılamadı — {exc}", symbol)
+
+        t = threading.Thread(target=_run, name=f"council-{symbol}", daemon=True)
+        self._council_threads[symbol] = t
+        t.start()
+
+    def apply_pending_decisions(self, symbol: str, price: float) -> None:
+        """Kurulun bitirdiği ama henüz uygulanmamış kararları emre çevirir."""
+        for run in db.get_agent_runs(limit=5, symbol=symbol):
+            if run["status"] != "OK" or run["executed"]:
+                continue
+            action = run["action"]
+            has_position = db.has_open_position(symbol)
+
+            if action == "BUY" and not has_position:
+                if len(db.get_open_positions()) >= config.MAX_OPEN_POSITIONS:
+                    db.add_log("AGENT", f"{symbol}: AL kararı atlandı (pozisyon limiti)", symbol)
+                else:
+                    self.open_trade(
+                        symbol, price,
+                        size_factor=run["size_factor"] or 1.0,
+                        stop_price=run["proposed_stop"],
+                        reason=f"Kurul kararı: {run['rating']}",
+                    )
+            elif action == "SELL" and has_position and config.AGENT_EXIT_ON_SELL:
+                for pos in db.get_open_positions(symbol):
+                    self.close_trade(pos, price, f"Kurul kararı: {run['rating']}")
+
+            db.mark_agent_run_executed(run["id"])
 
     # ------------------------------------------------------------ ana turlar
     def process_symbol(self, symbol: str) -> None:
+        """Hızlı döngü: fiyat + korumalar + kurul kararlarının uygulanması."""
         df = self.market.fetch_ohlcv(symbol)
         if df is None or len(df) < max(config.RSI_PERIOD, config.EMA_PERIOD) + 2:
             log.warning("[%s] Yeterli mum verisi yok.", symbol)
             return
 
+        # İndikatörler yalnızca panelde gösterilen piyasa görüntüsü için;
+        # al/sat kararına GİRMEZ (karar kurulun).
         df = add_indicators(df)
-        price = float(df["close"].iloc[-1])          # oluşmakta olan mumun son fiyatı
-        closed = df.iloc[-2]                          # sinyaller kapanmış mumdan okunur
+        price = float(df["close"].iloc[-1])
+        closed = df.iloc[-2]
         rsi = None if pd.isna(closed["rsi"]) else float(closed["rsi"])
-
-        # Trend filtresi: EMA farklı bir zaman diliminden gelir (varsayılan: 20 günlük)
         if config.EMA_TIMEFRAME == config.TIMEFRAME:
             ema = None if pd.isna(closed["ema"]) else float(closed["ema"])
         else:
@@ -345,22 +399,21 @@ class TradingBot:
                 log.warning("[%s] Trend EMA alınamadı: %s", symbol, exc)
                 ema = None
 
-        signal = "BEKLE"
-
-        # 1) Önce açık pozisyonlar için çıkış kontrolü
+        # 1) Açık pozisyonun korumaları (kâr al / stop)
         for position in db.get_open_positions(symbol):
-            reason = self.check_exit(position, price, rsi)
+            reason = self.check_exit(position, price)
             if reason:
                 self.close_trade(position, price, reason)
-                signal = "SAT"
 
-        # 2) Sonra yeni giriş kontrolü
-        if signal != "SAT" and self.check_entry(symbol, price, rsi, ema):
-            self.open_trade(symbol, price, rsi, ema)
-            signal = "AL"
-        elif signal != "SAT" and db.has_open_position(symbol):
-            signal = "POZİSYONDA"
+        # 2) Kurulun tamamlanmış kararlarını uygula
+        self.apply_pending_decisions(symbol, price)
 
+        # 3) Zamanı geldiyse yeni toplantıyı arka planda başlat
+        self.maybe_convene(symbol, price)
+
+        last = db.get_agent_runs(limit=1, symbol=symbol)
+        signal = "POZİSYONDA" if db.has_open_position(symbol) else (
+            last[0]["action"] if last and last[0]["status"] == "OK" else "BEKLE")
         db.update_market(symbol, price, rsi, ema, signal)
         log.info(
             "[%s] fiyat %s | RSI %s | EMA%s(%s) %s | %s",
@@ -464,6 +517,8 @@ def main() -> None:
                         help="İnternet olmadan sentetik fiyatlarla çalış")
     parser.add_argument("--reset", action="store_true",
                         help="Sanal bakiyeyi sıfırlayıp çık")
+    parser.add_argument("--convene", metavar="SEMBOL", nargs="?", const="",
+                        help="Kurulu hemen topla (sıklık sınırını atlar) ve çık")
     args = parser.parse_args()
 
     if args.simulate:
@@ -477,6 +532,16 @@ def main() -> None:
         return
 
     bot = TradingBot()
+
+    if args.convene is not None:
+        symbol = args.convene or config.SYMBOLS[0]
+        ok, reason = agents_engine.AgentCouncil.readiness()
+        if not ok:
+            print(f"Kurul çalıştırılamıyor: {reason}")
+            return
+        print(bot.council.analyze(symbol, bot.market.fetch_price(symbol)))
+        return
+
     if args.once:
         db.set_state("running", "1" if args.force else db.get_state("running", "0"))
         bot.run_once()

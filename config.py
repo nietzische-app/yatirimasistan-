@@ -108,6 +108,76 @@ STOP_LOSS_PCT = _env_float("STOP_LOSS_PCT", 0.015)      # %1.5 zarar kes
 COOLDOWN_MINUTES = _env_int("COOLDOWN_MINUTES", 15)
 
 # --------------------------------------------------------------------------
+# 3B) KARAR MOTORU: TradingAgents çoklu ajan kurulu
+# --------------------------------------------------------------------------
+# Al/sat kararını artık RSI/EMA kuralları değil, TradingAgents kurulu verir.
+# Kurul yavaş çalışır (LLM maliyeti); pozisyon takibi (TP/SL) hızlı döngüde kalır.
+#
+#   "agents" -> kararı yapay zekâ kurulu verir (varsayılan)
+#   "manual" -> kurul kapalı; yalnız açık pozisyonlar yönetilir, yeni alım olmaz
+DECISION_ENGINE = _env_str("DECISION_ENGINE", "agents")
+
+# Kurul bir sembol için kaç dakikada bir toplansın.
+# DİKKAT: her toplantı onlarca LLM çağrısı demektir. 30 saniyede bir çalıştırmak
+# günde binlerce dolar maliyet çıkarır; alt sınır bilerek 15 dakikadır.
+AGENT_INTERVAL_MINUTES = max(15, _env_int("AGENT_INTERVAL_MINUTES", 60))
+
+# Gün başına toplam toplantı üst sınırı (maliyet emniyet supabı, tüm semboller)
+AGENT_MAX_RUNS_PER_DAY = _env_int("AGENT_MAX_RUNS_PER_DAY", 60)
+
+# Tek bir toplantı bu süreyi aşarsa iptal edilir
+AGENT_RUN_TIMEOUT_SECONDS = _env_int("AGENT_RUN_TIMEOUT_SECONDS", 1200)
+
+# --- LLM sağlayıcısı ---
+# OpenRouter / DeepSeek / yerel sunucular OpenAI uyumlu uçtan çalışır:
+#   LLM_PROVIDER=openai + LLM_BACKEND_URL=https://openrouter.ai/api/v1
+LLM_PROVIDER = _env_str("LLM_PROVIDER", "openai")
+LLM_BACKEND_URL = _env_str("LLM_BACKEND_URL", "https://openrouter.ai/api/v1")
+LLM_DEEP_MODEL = _env_str("LLM_DEEP_MODEL", "deepseek/deepseek-chat")     # derin düşünen (yargıçlar)
+LLM_QUICK_MODEL = _env_str("LLM_QUICK_MODEL", "deepseek/deepseek-chat")   # hızlı (analistler)
+LLM_API_KEY = (_env_str("OPENROUTER_API_KEY", "") or _env_str("OPENAI_API_KEY", "")
+               or _env_str("DEEPSEEK_API_KEY", ""))
+LLM_TEMPERATURE = _env_str("LLM_TEMPERATURE", "")     # boş = sağlayıcı varsayılanı
+LLM_MAX_TOKENS = _env_str("LLM_MAX_TOKENS", "")
+LLM_MAX_RETRIES = _env_str("LLM_MAX_RETRIES", "3")
+
+# --- Kurulun bileşimi (hepsi açık = %100 kapasite) ---
+AGENT_ANALYSTS = [a.strip() for a in
+                  _env_str("AGENT_ANALYSTS", "market,social,news,fundamentals").split(",")
+                  if a.strip()]
+AGENT_DEBATE_ROUNDS = _env_int("AGENT_DEBATE_ROUNDS", 2)       # boğa/ayı tartışma turu
+AGENT_RISK_ROUNDS = _env_int("AGENT_RISK_ROUNDS", 2)           # risk kurulu turu
+AGENT_OUTPUT_LANGUAGE = _env_str("AGENT_OUTPUT_LANGUAGE", "Turkish")
+
+# --- Veri sağlayıcı anahtarları (ajanların haber/temel verisi için) ---
+ALPHA_VANTAGE_API_KEY = _env_str("ALPHA_VANTAGE_API_KEY", "")
+FRED_API_KEY = _env_str("FRED_API_KEY", "")
+
+# --- Karar -> emir eşlemesi ---
+# Kurul 5 kademeli not verir. Hangi not ne kadar pozisyon açsın:
+AGENT_SIZE_BY_RATING = {
+    "buy": 1.0,          # POSITION_SIZE_PCT'in tamamı
+    "overweight": 0.5,   # yarısı
+    "hold": 0.0,
+    "underweight": 0.0,
+    "sell": 0.0,
+}
+# Kurul "Sell/Underweight" derse açık pozisyon kapatılsın mı?
+AGENT_EXIT_ON_SELL = _env_bool("AGENT_EXIT_ON_SELL", True)
+# Kurulun önerdiği stop-loss kullanılsın mı (yoksa config.STOP_LOSS_PCT)
+AGENT_USE_PROPOSED_STOP = _env_bool("AGENT_USE_PROPOSED_STOP", True)
+# Ajan önerisi bu sınırların dışındaysa yok sayılır (saçma stop'a karşı koruma)
+AGENT_STOP_MIN_PCT = _env_float("AGENT_STOP_MIN_PCT", 0.005)
+AGENT_STOP_MAX_PCT = _env_float("AGENT_STOP_MAX_PCT", 0.15)
+
+# Binance sembolünü ajanların veri sağlayıcısının anladığı tickera çevirir
+# (BTC/USDT -> BTCUSD -> yfinance'te BTC-USD).
+def agent_ticker(symbol: str) -> str:
+    base, _, quote = symbol.partition("/")
+    return f"{base}{'USD' if quote.upper().startswith('USD') else quote.upper()}"
+
+
+# --------------------------------------------------------------------------
 # 4) DÖNGÜ / KAYIT AYARLARI
 # --------------------------------------------------------------------------
 LOOP_INTERVAL_SECONDS = _env_int("LOOP_INTERVAL_SECONDS", 30)      # bot kaç saniyede bir piyasayı kontrol etsin
@@ -146,4 +216,8 @@ def summary() -> dict:
         "Komisyon": f"%{FEE_RATE * 100:g}",
         "Döngü": f"{LOOP_INTERVAL_SECONDS} sn",
         "Motor": "panel içinde" if RUN_BOT_IN_DASHBOARD else "ayrı süreç (bot.py)",
+        "Karar motoru": ("TradingAgents kurulu" if DECISION_ENGINE == "agents" else "kapalı (manuel)"),
+        "Kurul sıklığı": f"{AGENT_INTERVAL_MINUTES} dk / sembol (günde en fazla {AGENT_MAX_RUNS_PER_DAY})",
+        "Ajanlar": ", ".join(AGENT_ANALYSTS) + f" | tartışma {AGENT_DEBATE_ROUNDS}, risk {AGENT_RISK_ROUNDS} tur",
+        "LLM": f"{LLM_DEEP_MODEL} @ {LLM_BACKEND_URL or 'varsayılan'}",
     }

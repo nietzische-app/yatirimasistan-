@@ -1,0 +1,3 @@
+[submodule "trading_agents"]
+	path = trading_agents
+	url = https://github.com/TauricResearch/TradingAgents.git

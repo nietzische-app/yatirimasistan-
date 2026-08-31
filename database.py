@@ -16,6 +16,7 @@ Tablolar
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -130,6 +131,24 @@ CREATE TABLE IF NOT EXISTS logs (
     message TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol         TEXT    NOT NULL,
+    started_at     TEXT    NOT NULL,
+    finished_at    TEXT,
+    status         TEXT    NOT NULL DEFAULT 'RUNNING',  -- RUNNING | OK | ERROR | TIMEOUT
+    rating         TEXT,             -- Buy | Overweight | Hold | Underweight | Sell | REVIEW
+    action         TEXT,             -- BUY | SELL | HOLD
+    size_factor    REAL,             -- pozisyon büyüklüğü çarpanı (0-1)
+    proposed_stop  REAL,             -- ajanların önerdiği stop fiyatı
+    price_at_run   REAL,
+    duration_sec   REAL,
+    error          TEXT,
+    executed       INTEGER NOT NULL DEFAULT 0,   -- karar uygulandı mı
+    reports        TEXT              -- JSON: tüm ajan raporları ve tartışmalar
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_symbol ON agent_runs(symbol, id);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
 CREATE INDEX IF NOT EXISTS idx_trades_closed_at ON trades(closed_at);
 CREATE INDEX IF NOT EXISTS idx_equity_ts        ON equity_curve(ts);
@@ -403,6 +422,107 @@ def get_market() -> dict[str, dict]:
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM market").fetchall()
     return {r["symbol"]: dict(r) for r in rows}
+
+
+# --------------------------------------------------------------------------
+# Yapay zekâ kurulu (TradingAgents) koşuları
+# --------------------------------------------------------------------------
+def start_agent_run(symbol: str, price: Optional[float] = None) -> int:
+    """Kurul toplantısı başlarken kaydı açar; id döner."""
+    ensure_db()
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO agent_runs (symbol, started_at, status, price_at_run)"
+            " VALUES (?, ?, 'RUNNING', ?)",
+            (symbol, utcnow(), price),
+        )
+        return int(cur.lastrowid)
+
+
+def finish_agent_run(run_id: int, *, status: str, rating: Optional[str] = None,
+                     action: Optional[str] = None, size_factor: Optional[float] = None,
+                     proposed_stop: Optional[float] = None, duration_sec: Optional[float] = None,
+                     error: Optional[str] = None, reports: Optional[dict] = None) -> None:
+    """Toplantı bitince sonucu ve tüm ajan raporlarını yazar."""
+    ensure_db()
+    with get_connection() as conn:
+        conn.execute(
+            """UPDATE agent_runs
+               SET finished_at = ?, status = ?, rating = ?, action = ?, size_factor = ?,
+                   proposed_stop = ?, duration_sec = ?, error = ?, reports = ?
+               WHERE id = ?""",
+            (utcnow(), status, rating, action, size_factor, proposed_stop,
+             duration_sec, error, json.dumps(reports, ensure_ascii=False) if reports else None,
+             run_id),
+        )
+
+
+def mark_agent_run_executed(run_id: int) -> None:
+    ensure_db()
+    with get_connection() as conn:
+        conn.execute("UPDATE agent_runs SET executed = 1 WHERE id = ?", (run_id,))
+
+
+def get_agent_runs(limit: int = 50, symbol: Optional[str] = None,
+                   with_reports: bool = False) -> list[dict]:
+    ensure_db()
+    cols = "*" if with_reports else (
+        "id, symbol, started_at, finished_at, status, rating, action, size_factor,"
+        " proposed_stop, price_at_run, duration_sec, error, executed")
+    with get_connection() as conn:
+        if symbol:
+            rows = conn.execute(
+                f"SELECT {cols} FROM agent_runs WHERE symbol = ? ORDER BY id DESC LIMIT ?",
+                (symbol, int(limit))).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT {cols} FROM agent_runs ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        if with_reports and d.get("reports"):
+            try:
+                d["reports"] = json.loads(d["reports"])
+            except (TypeError, ValueError):
+                d["reports"] = {}
+        out.append(d)
+    return out
+
+
+def get_agent_run(run_id: int) -> Optional[dict]:
+    ensure_db()
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    if d.get("reports"):
+        try:
+            d["reports"] = json.loads(d["reports"])
+        except (TypeError, ValueError):
+            d["reports"] = {}
+    return d
+
+
+def last_agent_run_time(symbol: str) -> Optional[str]:
+    """Bu sembol için en son toplantının başlangıç zamanı (sıklık kontrolü için)."""
+    ensure_db()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT started_at FROM agent_runs WHERE symbol = ? ORDER BY id DESC LIMIT 1",
+            (symbol,)).fetchone()
+    return row["started_at"] if row else None
+
+
+def agent_runs_today() -> int:
+    """Bugün başlatılan toplantı sayısı (günlük maliyet sınırı için)."""
+    ensure_db()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM agent_runs WHERE started_at >= ?", (today + " 00:00:00",)
+        ).fetchone()
+    return int(row["c"])
 
 
 # --------------------------------------------------------------------------

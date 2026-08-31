@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
 
+import agents_engine
 import config
 import database as db
 from bot import BotRunner, MarketData, TradingBot
@@ -507,6 +508,114 @@ if trades:
     )
 else:
     st.info("Henüz kapanmış işlem yok.")
+
+# ==========================================================================
+# YAPAY ZEKÂ KURUL RAPORLARI (TradingAgents)
+# ==========================================================================
+st.divider()
+st.subheader("🧠 Yapay Zekâ Kurul Raporları (Agents Reasoning)")
+
+_ready, _reason = agents_engine.AgentCouncil.readiness()
+if _ready:
+    st.caption(
+        f"✅ Kurul aktif · {', '.join(config.AGENT_ANALYSTS)} analistleri · "
+        f"tartışma {config.AGENT_DEBATE_ROUNDS} tur / risk {config.AGENT_RISK_ROUNDS} tur · "
+        f"model {config.LLM_DEEP_MODEL} · her {config.AGENT_INTERVAL_MINUTES} dakikada bir toplanır"
+    )
+else:
+    st.warning(f"Kurul devre dışı: {_reason}")
+
+runs = db.get_agent_runs(limit=50)
+if runs:
+    # Sayıları burada metne çeviriyoruz: boş hücrelerde "None" yerine "-" görünsün.
+    def _opt(value, fn):
+        return "-" if value is None else fn(value)
+
+    decisions = pd.DataFrame([{
+        "Zaman": local_time(r["started_at"]),
+        "Coin": r["symbol"],
+        "Not": r["rating"] or "-",
+        "Karar": r["action"] or "-",
+        "Büyüklük": _opt(r["size_factor"], lambda v: f"x{float(v):g}"),
+        "Önerilen Stop": _opt(r["proposed_stop"], fmt_price),
+        "Fiyat": _opt(r["price_at_run"], fmt_price),
+        "Süre (sn)": _opt(r["duration_sec"], lambda v: f"{float(v):,.0f}"),
+        "Durum": r["status"],
+        "Uygulandı": "✓" if r["executed"] else "",
+    } for r in runs])
+    render_table(decisions, {}, [], height=240)
+
+    ok_runs = [r for r in runs if r["status"] == "OK"]
+    if ok_runs:
+        labels = {
+            f"#{r['id']} · {r['symbol']} · {r['rating']} · {local_time(r['started_at'])}": r["id"]
+            for r in ok_runs
+        }
+        chosen = st.selectbox("Hangi toplantının tutanağını görmek istersin?", list(labels))
+        detail = db.get_agent_run(labels[chosen])
+        reports = (detail or {}).get("reports") or {}
+
+        if not reports:
+            st.info("Bu toplantı için rapor kaydedilmemiş.")
+        else:
+            head = st.columns(4)
+            head[0].metric("Not", detail["rating"] or "-")
+            head[1].metric("Karar", detail["action"] or "-")
+            head[2].metric("Önerilen Stop",
+                           fmt_price(detail["proposed_stop"]) if detail["proposed_stop"] else "-")
+            head[3].metric("Süre", f"{detail['duration_sec']:.0f} sn"
+                           if detail.get("duration_sec") else "-")
+
+            # Analist raporları ve nihai karar
+            for key, title in agents_engine.REPORT_FIELDS:
+                if reports.get(key):
+                    with st.expander(title, expanded=(key == "final_trade_decision")):
+                        st.markdown(reports[key])
+
+            # Boğa / Ayı tartışması
+            debate = reports.get("investment_debate") or {}
+            if debate:
+                with st.expander("🐂 Boğa ↔ 🐻 Ayı Tartışması", expanded=False):
+                    bull, bear = st.columns(2)
+                    with bull:
+                        st.markdown("**🐂 Boğa Araştırmacısı**")
+                        st.markdown(debate.get("bull_history") or "_kayıt yok_")
+                    with bear:
+                        st.markdown("**🐻 Ayı Araştırmacısı**")
+                        st.markdown(debate.get("bear_history") or "_kayıt yok_")
+                    if debate.get("judge_decision"):
+                        st.markdown("---")
+                        st.markdown("**⚖️ Araştırma Müdürünün Hükmü**")
+                        st.markdown(debate["judge_decision"])
+
+            # Risk kurulu
+            risk = reports.get("risk_debate") or {}
+            if risk:
+                with st.expander("🛡️ Risk Kurulu Tartışması", expanded=False):
+                    cols = st.columns(3)
+                    for col, (key, title) in zip(cols, (
+                            ("aggressive_history", "🔥 Agresif"),
+                            ("conservative_history", "🧊 Muhafazakâr"),
+                            ("neutral_history", "⚖️ Nötr"))):
+                        with col:
+                            st.markdown(f"**{title}**")
+                            st.markdown(risk.get(key) or "_kayıt yok_")
+                    if risk.get("judge_decision"):
+                        st.markdown("---")
+                        st.markdown("**🧑‍⚖️ Risk Yöneticisinin Onay/Ret Gerekçesi**")
+                        st.markdown(risk["judge_decision"])
+
+    errors = [r for r in runs if r["status"] in ("ERROR", "TIMEOUT")]
+    if errors:
+        with st.expander(f"⚠️ Başarısız toplantılar ({len(errors)})", expanded=False):
+            for r in errors[:10]:
+                st.markdown(f"**{local_time(r['started_at'])} · {r['symbol']} · {r['status']}**")
+                st.caption((r.get("error") or "")[:400])
+else:
+    st.info(
+        "Henüz kurul toplantısı yok. Bot çalışırken ilk toplantı kendiliğinden yapılır; "
+        "hemen denemek için sunucuda:  `docker compose exec bot python bot.py --convene BTC/USDT`"
+    )
 
 # ==========================================================================
 # LOGLAR
