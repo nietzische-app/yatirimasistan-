@@ -114,6 +114,24 @@ def get_market_data() -> MarketData | None:
 runner = bootstrap()
 
 
+@st.cache_data(ttl=20, show_spinner=False)
+def alpaca_snapshot() -> dict:
+    """Hesap + pozisyonlar (20 sn cache; her rerun'da API'yi yormasın)."""
+    try:
+        ex = alpaca_execution.get_executor()
+        return {"ok": True, "account": ex.account(), "positions": ex.positions()}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+# Etkin emir yürütme arkası: paneldeki rakamlar buna göre okunur
+_backend = alpaca_execution.backend_name()
+_alpaca_ready = _backend == "alpaca" and alpaca_execution.AlpacaExecutor.readiness()[0]
+_snap = alpaca_snapshot() if _alpaca_ready else {"ok": False}
+_alpaca_live = bool(_snap.get("ok"))
+
+
+
 # ==========================================================================
 # YARDIMCILAR
 # ==========================================================================
@@ -298,6 +316,12 @@ st.caption(
     f"RSI({config.RSI_PERIOD}) + EMA({config.EMA_PERIOD}·{config.EMA_TIMEFRAME}) stratejisi · "
     f"TP %{config.TAKE_PROFIT_PCT * 100:g} / SL %{config.STOP_LOSS_PCT * 100:g}"
 )
+st.caption(
+    ("🏦 Emirler **Alpaca " + ("PAPER" if config.ALPACA_PAPER else "CANLI")
+     + "** hesabına gidiyor — aşağıdaki *Dahili Sanal Defter* bölümleri kullanılmıyor.")
+    if _alpaca_live else
+    "📒 Emirler **dahili sanal defterde** simüle ediliyor."
+)
 
 open_positions = db.get_open_positions()
 prices = current_prices([p["symbol"] for p in open_positions])
@@ -305,35 +329,60 @@ stats = db.get_stats(prices)
 trades = db.get_trades(limit=1000)
 
 m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric(
-    "💰 Toplam Varlık (Equity)",
-    money(stats["equity"]),
-    f"{stats['total_pnl']:+,.2f} ({stats['total_pnl_pct']:+.2f}%)",
-)
-m2.metric(
-    "🏦 Serbest Bakiye",
-    money(stats["balance"]),
-    f"Açık pozisyon değeri: {stats['open_value']:,.2f}",
-    delta_color="off",
-)
-m3.metric(
-    "📊 Açık Pozisyon K/Z",
-    f"{stats['open_pnl']:+,.2f} {config.QUOTE_CURRENCY}",
-    f"{stats['open_pnl_pct']:+.2f}%" if open_positions else "pozisyon yok",
-    delta_color="normal" if open_positions else "off",
-)
-m4.metric(
-    "✅ Başarılı İşlem",
-    f"{stats['winning_trades']} / {stats['total_trades']}",
-    f"Gerçekleşen K/Z: {stats['realized_pnl']:+,.2f}",
-    delta_color="off",
-)
-m5.metric(
-    "🎯 Win Rate",
-    f"%{stats['win_rate']:.1f}",
-    f"{stats['losing_trades']} zararlı işlem",
-    delta_color="off",
-)
+
+if _alpaca_live:
+    # Emirler Alpaca'ya gidiyor: tepedeki rakamlar GERÇEK hesabı göstersin,
+    # kullanılmayan dahili defteri değil.
+    _acc = _snap["account"]
+    _pos = _snap["positions"]
+    _open_pl = sum(p["unrealized_pl"] or 0.0 for p in _pos)
+    _cost = sum(p["cost_basis"] or 0.0 for p in _pos)
+    m1.metric("💼 Portföy Değeri (Alpaca)",
+              f"{_acc['equity']:,.2f} {_acc['currency']}" if _acc["equity"] else "-",
+              (f"{_acc['day_pnl']:+,.2f} ({_acc['day_pnl_pct']:+.2f}%) bugün"
+               if _acc["day_pnl"] is not None else "gün verisi yok"))
+    m2.metric("💵 Nakit", f"{_acc['cash']:,.2f}" if _acc["cash"] else "-",
+              f"Alım gücü: {_acc['buying_power']:,.0f}" if _acc["buying_power"] else "",
+              delta_color="off")
+    m3.metric("📊 Açık Pozisyon K/Z", f"{_open_pl:+,.2f}",
+              f"{_open_pl / _cost * 100:+.2f}%" if _cost else "pozisyon yok",
+              delta_color="normal" if _pos else "off")
+    m4.metric("📦 Açık Pozisyon", f"{len(_pos)}",
+              f"{len(db.get_broker_orders(200))} emir gönderildi", delta_color="off")
+    _ok_runs = [r for r in db.get_agent_runs(200) if r["status"] == "OK"]
+    m5.metric("🧠 Kurul Kararı", f"{len(_ok_runs)}",
+              f"{sum(1 for r in _ok_runs if r['action'] == 'BUY')} AL / "
+              f"{sum(1 for r in _ok_runs if r['action'] == 'SELL')} SAT", delta_color="off")
+else:
+    m1.metric(
+        "💰 Toplam Varlık (Equity)",
+        money(stats["equity"]),
+        f"{stats['total_pnl']:+,.2f} ({stats['total_pnl_pct']:+.2f}%)",
+    )
+    m2.metric(
+        "🏦 Serbest Bakiye",
+        money(stats["balance"]),
+        f"Açık pozisyon değeri: {stats['open_value']:,.2f}",
+        delta_color="off",
+    )
+    m3.metric(
+        "📊 Açık Pozisyon K/Z",
+        f"{stats['open_pnl']:+,.2f} {config.QUOTE_CURRENCY}",
+        f"{stats['open_pnl_pct']:+.2f}%" if open_positions else "pozisyon yok",
+        delta_color="normal" if open_positions else "off",
+    )
+    m4.metric(
+        "✅ Başarılı İşlem",
+        f"{stats['winning_trades']} / {stats['total_trades']}",
+        f"Gerçekleşen K/Z: {stats['realized_pnl']:+,.2f}",
+        delta_color="off",
+    )
+    m5.metric(
+        "🎯 Win Rate",
+        f"%{stats['win_rate']:.1f}",
+        f"{stats['losing_trades']} zararlı işlem",
+        delta_color="off",
+    )
 
 st.divider()
 
@@ -343,7 +392,7 @@ st.divider()
 left, right = st.columns([3, 2])
 
 with left:
-    st.subheader("🟢 Açık Pozisyonlar")
+    st.subheader("🟢 Açık Pozisyonlar" + (" · dahili defter (kullanılmıyor)" if _alpaca_live else ""))
     if open_positions:
         rows = []
         for pos in open_positions:
@@ -432,7 +481,7 @@ st.divider()
 # ==========================================================================
 # GRAFİK — EQUITY CURVE
 # ==========================================================================
-st.subheader("📉 Sanal Bakiye Değişimi (Equity Curve)")
+st.subheader("📉 Sanal Bakiye Değişimi (Equity Curve)" + (" · dahili defter (kullanılmıyor)" if _alpaca_live else ""))
 curve = db.get_equity_curve()
 if curve:
     curve_df = pd.DataFrame(curve)
@@ -476,7 +525,7 @@ st.divider()
 # ==========================================================================
 # TABLO 2 — İŞLEM GEÇMİŞİ
 # ==========================================================================
-st.subheader("🧾 İşlem Geçmişi (Kapanmış İşlemler)")
+st.subheader("🧾 İşlem Geçmişi (Kapanmış İşlemler)" + (" · dahili defter (kullanılmıyor)" if _alpaca_live else ""))
 if trades:
     hist = pd.DataFrame(trades)
     hist_df = pd.DataFrame({
@@ -513,17 +562,6 @@ else:
 # ==========================================================================
 # ALPACA PAPER TRADING HESABI
 # ==========================================================================
-@st.cache_data(ttl=20, show_spinner=False)
-def alpaca_snapshot() -> dict:
-    """Hesap + pozisyonlar (20 sn cache; her rerun'da API'yi yormasın)."""
-    try:
-        ex = alpaca_execution.get_executor()
-        return {"ok": True, "account": ex.account(), "positions": ex.positions()}
-    except Exception as exc:
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-
-
-_backend = alpaca_execution.backend_name()
 if _backend == "alpaca" or config.ALPACA_API_KEY:
     st.divider()
     st.subheader("🏦 Alpaca Hesabı" + (" · PAPER" if config.ALPACA_PAPER else " · ⚠️ CANLI"))
@@ -531,7 +569,7 @@ if _backend == "alpaca" or config.ALPACA_API_KEY:
     if not _ok:
         st.warning(f"Alpaca kullanılamıyor: {_why}")
     else:
-        snap = alpaca_snapshot()
+        snap = _snap if _snap.get("ok") else alpaca_snapshot()
         if not snap["ok"]:
             st.error(f"Alpaca'ya bağlanılamadı: {snap['error']}")
         else:
