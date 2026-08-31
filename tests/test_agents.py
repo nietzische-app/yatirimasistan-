@@ -137,6 +137,33 @@ assert res4["status"] == "TIMEOUT", res4
 config.AGENT_RUN_TIMEOUT_SECONDS = _orig
 print("✓ zaman aşımı yakalanıyor")
 
+# --- 7b) Kalıcı hata kurulu durdurur, geçici hata durdurmaz -----------------
+db.set_state("council_halted", "")
+
+class QuotaGraph:
+    def propagate(self, *a, **k):
+        raise RuntimeError("APIStatusError: Error code: 402 - {'error': "
+                           "{'message': 'This request requires more credits'}}")
+council._graph = QuotaGraph()
+res_fatal = council.analyze("BTC/USDT", price=100.0)
+assert res_fatal["status"] == "ERROR"
+assert res_fatal.get("fatal"), "402 kalıcı hata olarak sınıflanmalı"
+assert ae.AgentCouncil.halted(), "kredi bitince kurul durdurulmalı"
+assert not ae.AgentCouncil.due("XRP/USDT"), "durdurulmuşken yeni toplantı olmamalı"
+print(f"✓ kredi bitince kurul duruyor ({ae.AgentCouncil.halted()})")
+
+ae.AgentCouncil.resume()
+assert not ae.AgentCouncil.halted() and ae.AgentCouncil.due("XRP/USDT")
+print("✓ --resume-council kurulu geri açıyor")
+
+class FlakyGraph:
+    def propagate(self, *a, **k):
+        raise RuntimeError("RateLimitError: 429 Too Many Requests")
+council._graph = FlakyGraph()
+council.analyze("BTC/USDT", price=100.0)
+assert not ae.AgentCouncil.halted(), "geçici hata (429) kurulu durdurmamalı"
+print("✓ geçici hata (429) kurulu durdurmuyor")
+
 # --- 8) Maliyet sınırları ----------------------------------------------------
 _iv = config.AGENT_INTERVAL_MINUTES
 config.AGENT_INTERVAL_MINUTES = 60

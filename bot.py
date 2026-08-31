@@ -574,15 +574,28 @@ def print_status() -> None:
     print(f"  Mod                : {'DEMO (sanal para)' if config.DEMO_MODE else 'GERÇEK EMİR'}")
 
     ok, reason = agents_engine.AgentCouncil.readiness()
-    print(f"\n  Karar motoru       : {'TradingAgents kurulu' if ok else 'KAPALI'}")
+    halted = agents_engine.AgentCouncil.halted()
+    print(f"\n  Karar motoru       : "
+          f"{'DURDURULDU' if halted else ('TradingAgents kurulu' if ok else 'KAPALI')}")
+    if halted:
+        print(f"    ├─ sebep         : {halted}")
+        print(f"    └─ düzeltince    : python bot.py --resume-council")
     if not ok:
         print(f"    └─ {reason}")
-    else:
+    elif not halted:
         print(f"    ├─ analistler    : {', '.join(config.AGENT_ANALYSTS)}")
         print(f"    ├─ model         : {config.LLM_DEEP_MODEL}")
         print(f"    ├─ sıklık        : {config.AGENT_INTERVAL_MINUTES} dk/sembol, "
               f"günde en fazla {config.AGENT_MAX_RUNS_PER_DAY}")
-        print(f"    └─ bugünkü koşu  : {db.agent_runs_today()}")
+        print(f"    ├─ bugünkü koşu  : {db.agent_runs_today()}")
+        credit = agents_engine.openrouter_credit()
+        if credit and credit.get("remaining") is not None:
+            print(f"    └─ OpenRouter    : kalan {credit['remaining']:.2f} $ "
+                  f"(kullanılan {credit['usage']:.2f} / limit {credit['limit']:.2f})")
+        elif credit:
+            print(f"    └─ OpenRouter    : kullanılan {credit['usage']:.2f} $ (limitsiz anahtar)")
+        else:
+            print(f"    └─ OpenRouter    : kredi bilgisi okunamadı")
 
     backend = alpaca_execution.backend_name()
     print(f"\n  Emir yürütme       : ", end="")
@@ -663,6 +676,8 @@ def main() -> None:
                         help="Kurulu hemen topla (sıklık sınırını atlar) ve çık")
     parser.add_argument("--status", action="store_true",
                         help="Sistemin tam durumunu yazdır ve çık")
+    parser.add_argument("--resume-council", action="store_true",
+                        help="Kalıcı hata sonrası durdurulan kurulu yeniden etkinleştir")
     args = parser.parse_args()
 
     if args.simulate:
@@ -677,6 +692,13 @@ def main() -> None:
 
     if args.status:
         print_status()
+        return
+
+    if args.resume_council:
+        db.init_db()
+        was = agents_engine.AgentCouncil.halted()
+        agents_engine.AgentCouncil.resume()
+        print(f"Kurul yeniden etkinleştirildi (durdurma sebebi: {was or 'yoktu'}).")
         return
 
     bot = TradingBot()

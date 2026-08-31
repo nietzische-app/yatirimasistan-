@@ -167,6 +167,26 @@ dolar demektir. Bu yüzden üç fren var:
 Ucuz bir modelle başla (`deepseek/deepseek-chat`), maliyeti birkaç gün izle,
 sonra `LLM_DEEP_MODEL`'i güçlendir.
 
+**Kredi bittiğinde ne olur:** LLM sağlayıcısı `402` (kredi yok) veya `401`
+(anahtar geçersiz) dönerse kurul **kendini durdurur** — saatte bir boşuna
+denemez. `python bot.py --status` sebebi yazar; kredi yükledikten sonra:
+
+```bash
+docker compose exec bot python bot.py --resume-council
+```
+
+Geçici hatalar (429 rate limit, zaman aşımı) kurulu durdurmaz; bir sonraki
+turda tekrar denenir.
+
+**Maliyeti düşürme kolları** (etkisi büyükten küçüğe):
+
+| Ayar | Varsayılan | Ucuzu |
+|---|---|---|
+| `AGENT_INTERVAL_MINUTES` | 60 | 180 → günde 3 kat az toplantı |
+| `AGENT_DEBATE_ROUNDS` / `AGENT_RISK_ROUNDS` | 2 / 2 | 1 / 1 → toplantı süresi ~yarıya iner |
+| `AGENT_ANALYSTS` | 4 analist | `market,news` → 2 analist |
+| `LLM_MAX_TOKENS` | sınırsız | 2000 → uzun cevaplar kesilir |
+
 ### Kurul çalışmıyorsa ne olur
 
 LLM anahtarı yoksa, kota dolduysa veya toplantı hata alırsa: **sistem çökmez.**

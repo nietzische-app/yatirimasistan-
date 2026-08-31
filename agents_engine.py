@@ -146,6 +146,55 @@ def rating_to_action(rating: str) -> tuple[str, float]:
     return "HOLD", 0.0
 
 
+# Tekrar denemenin işe YARAMAYACAĞI hatalar: kredi bitmiş, anahtar geçersiz.
+# Bunlarda saatte bir tekrar denemek yalnızca log kirletir.
+FATAL_PATTERNS = (
+    ("402", "OpenRouter/LLM kredisi bitmiş"),
+    ("insufficient_quota", "LLM kotası bitmiş"),
+    ("more credits", "OpenRouter/LLM kredisi bitmiş"),
+    ("401", "LLM anahtarı geçersiz"),
+    ("invalid_api_key", "LLM anahtarı geçersiz"),
+    ("no auth credentials", "LLM anahtarı gönderilmiyor"),
+)
+
+
+def classify_error(message: str) -> Optional[str]:
+    """Hata kalıcı mı? Kalıcıysa insan diliyle sebebini döner, değilse None."""
+    low = (message or "").lower()
+    for needle, reason in FATAL_PATTERNS:
+        if needle.lower() in low:
+            return reason
+    return None
+
+
+def openrouter_credit() -> Optional[dict]:
+    """
+    OpenRouter anahtarının kredi durumu (kullanılan / limit).
+    En iyi çaba: uç nokta değişirse veya ağ yoksa sessizce None döner.
+    """
+    if "openrouter" not in (config.LLM_BACKEND_URL or "") or not config.LLM_API_KEY:
+        return None
+    try:
+        import json as _json
+        import urllib.request
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/key",
+            headers={"Authorization": f"Bearer {config.LLM_API_KEY}"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read()).get("data", {})
+        usage, limit = data.get("usage"), data.get("limit")
+        return {
+            "usage": float(usage) if usage is not None else None,
+            "limit": float(limit) if limit is not None else None,
+            "remaining": (float(limit) - float(usage))
+                         if (limit is not None and usage is not None) else None,
+            "free_tier": data.get("is_free_tier"),
+        }
+    except Exception as exc:
+        log.debug("OpenRouter kredi bilgisi alınamadı: %s", exc)
+        return None
+
+
 # ==========================================================================
 # KURUL
 # ==========================================================================
@@ -224,8 +273,24 @@ class AgentCouncil:
 
     # ------------------------------------------------------- sıklık kontrolü
     @staticmethod
+    def halted() -> Optional[str]:
+        """
+        Kurul kalıcı bir hata yüzünden durduruldu mu? Sebebini döner.
+        Kredi bittiğinde saatte bir tekrar denemenin anlamı yok; sorun
+        giderilince `python bot.py --resume-council` ile devam edilir.
+        """
+        return db.get_state("council_halted") or None
+
+    @staticmethod
+    def resume() -> None:
+        db.set_state("council_halted", "")
+        db.add_log("INFO", "Kurul yeniden etkinleştirildi.")
+
+    @staticmethod
     def due(symbol: str) -> bool:
         """Bu sembol için yeni toplantı zamanı geldi mi?"""
+        if AgentCouncil.halted():
+            return False
         if db.agent_runs_today() >= config.AGENT_MAX_RUNS_PER_DAY:
             return False
         last = db.last_agent_run_time(symbol)
@@ -274,9 +339,19 @@ class AgentCouncil:
 
         if "error" in box:
             db.finish_agent_run(run_id, status="ERROR", duration_sec=duration, error=box["error"])
-            db.add_log("ERROR", f"{symbol}: kurul hatası — {box['error'][:180]}", symbol)
-            log.error("[%s] Kurul hatası: %s", symbol, box["error"])
+            fatal = classify_error(box["error"])
+            if fatal:
+                # Tekrar denemek işe yaramaz: kurulu durdur ve sebebini yaz.
+                db.set_state("council_halted", fatal)
+                db.add_log("ERROR",
+                           f"KURUL DURDURULDU — {fatal}. Sorunu giderdikten sonra: "
+                           f"python bot.py --resume-council", symbol)
+                log.error("[%s] Kurul DURDURULDU — %s", symbol, fatal)
+            else:
+                db.add_log("ERROR", f"{symbol}: kurul hatası — {box['error'][:180]}", symbol)
+                log.error("[%s] Kurul hatası: %s", symbol, box["error"])
             result["error"] = box["error"]
+            result["fatal"] = fatal
             return result
 
         state, signal = box.get("state") or {}, box.get("signal")
