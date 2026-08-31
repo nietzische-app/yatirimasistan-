@@ -635,10 +635,23 @@ def print_status() -> None:
         print(f"    └─ açık pozisyon : {stats['open_positions']}")
 
     runs = db.get_agent_runs(limit=5)
+    running = [r for r in db.get_agent_runs(limit=20) if r["status"] == "RUNNING"]
+    if running:
+        print(f"\n  ⏳ ŞU AN {len(running)} TOPLANTI SÜRÜYOR:")
+        for r in running:
+            print(f"       {r['symbol']} · {age(r['started_at'])} başladı "
+                  f"(tipik süre 12-20 dk, üst sınır "
+                  f"{config.AGENT_RUN_TIMEOUT_SECONDS // 60} dk)")
+    else:
+        print(f"\n  ⏳ Süren toplantı yok.")
+
     print(f"\n  Son kurul toplantıları ({len(runs)}):")
     if not runs:
         print("    henüz yok — ilk toplantı için:  python bot.py --convene BTC/USDT")
     for r in runs:
+        if r["status"] == "RUNNING":
+            print(f"    {age(r['started_at']):>14} · {r['symbol']:<9} · SÜRÜYOR… (henüz karar yok)")
+            continue
         extra = f" -> {r['action']}" if r["action"] else ""
         applied = " ✓uygulandı" if r["executed"] else (" ⏳bekliyor" if r["status"] == "OK" else "")
         dur = f" [{r['duration_sec']:.0f} sn]" if r["duration_sec"] else ""
