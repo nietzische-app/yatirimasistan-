@@ -92,6 +92,10 @@ cat <<'MENU'
                                    ÖNERİLEN.
   3) Alan adım yok (düz IP)     -> https://SUNUCU_IP, self-signed sertifika.
                                    Trafik şifreli ama tarayıcı uyarı verir.
+                                   DİKKAT: IP'ye bağlanırken tarayıcı SNI
+                                   göndermediği için bazı Caddy kurulumlarında
+                                   el sıkışma hiç kurulmuyor
+                                   (ERR_SSL_PROTOCOL_ERROR). Olmazsa 2'yi seç.
 MENU
 read -rp "Seçim [1-3]: " ADDR_MODE
 SITE_TLS=""
@@ -257,7 +261,15 @@ fi
 echo
 grn "Kurulum tamam."
 echo "  Adres     : https://$PANEL_DOMAIN"
-[ "$ADDR_MODE" = "3" ] && echo "  Not       : Tarayıcı sertifika uyarısı verecek; 'Gelişmiş -> Devam et'."
+if [ "$ADDR_MODE" = "3" ]; then
+  echo "  Not       : Tarayıcı sertifika uyarısı verecek; 'Gelişmiş -> Devam et'."
+  echo "              Uyarı yerine ERR_SSL_PROTOCOL_ERROR görürsen Caddy o IP için"
+  echo "              sertifika üretememiştir. Kontrol:  docker logs --tail=40 $PROXY_CONTAINER"
+  echo "              Çözüm: yedeği geri yükleyip scripti 2. modla (sslip.io) çalıştır:"
+  echo "                cp $BACKUP $CADDYFILE_HOST"
+  echo "                docker exec $PROXY_CONTAINER caddy reload --config /etc/caddy/Caddyfile"
+  echo "                ./deploy/setup-existing-caddy.sh"
+fi
 [ "$ADDR_MODE" = "2" ] && echo "  Not       : Adres sslip.io üzerinden IP'ne çözülür; sertifika gerçektir."
 echo "  Kullanıcı : $PANEL_USER"
 echo "  Yedek     : $BACKUP"
