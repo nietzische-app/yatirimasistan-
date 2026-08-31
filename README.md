@@ -19,6 +19,7 @@ kontrol paneli.
 ├── app.py                    # Streamlit web paneli (arayüz + kontrol düğmeleri)
 ├── bot.py                    # Ticaret motoru: veri çekme, indikatör, al/sat kararı
 ├── agents_engine.py          # TradingAgents kurulunu çalıştırır, kararı ve raporları yazar
+├── alpaca_execution.py       # Kararları Alpaca Paper Trading'e emir olarak gönderir
 ├── trading_agents/           # TradingAgents reposu (git submodule, Apache-2.0)
 ├── backtest.py               # RSI/EMA taban çizgisini geçmiş veride sınama
 ├── database.py               # SQLite katmanı: bakiye, pozisyon, işlem, equity, log
@@ -41,6 +42,7 @@ kontrol paneli.
 └── tests/
     ├── test_execution.py     # Pozisyon/PnL/koruma testleri (internet gerekmez)
     ├── test_agents.py        # Kurul entegrasyonu (LLM anahtarı gerekmez, sahte kurul)
+    ├── test_alpaca.py        # Alpaca emir yürütme (API anahtarı gerekmez, sahte istemci)
     ├── test_backtest.py      # Backtest motoru testleri
     └── test_dashboard.py     # Paneli gerçekten çalıştıran render testi
 ```
@@ -175,6 +177,43 @@ hata panelde "Başarısız toplantılar" altında görünür.
 `bot.py`'deki al-sat kuralları **kaldırıldı**. İndikatörler yalnızca iki yerde
 kaldı: panelde gösterilen piyasa görüntüsü ve `backtest.py`. Backtest artık bir
 **taban çizgisi**: kurul, basit RSI/EMA kuralını yenebiliyor mu sorusunun ölçüsü.
+
+---
+
+## 🏦 Emir Yürütme: Alpaca Paper Trading
+
+Kurulun kararı iki arka uçtan birine gidebilir:
+
+| `EXECUTION_BACKEND` | Ne olur |
+|---|---|
+| `internal` | Emirler SQLite'taki sanal bakiyede simüle edilir (dış bağımlılık yok) |
+| `alpaca` | Emirler [Alpaca](https://alpaca.markets) Paper Trading hesabına gönderilir |
+| `auto` (varsayılan) | Alpaca anahtarı varsa `alpaca`, yoksa `internal` |
+
+Alpaca'nın kazandırdığı: gerçek bir emir defteri, gerçekçi doldurma davranışı,
+profesyonel sanal hesap — ve ileride **aynı kodla ABD hisselerine** (NVDA, AAPL,
+TSLA) geçebilme. `config.SYMBOLS` içine `NVDA` yazman yeterli.
+
+### Sembol dönüşümü
+
+`BTC/USDT` → `BTC/USD` (kripto) · `NVDA` → `NVDA` (hisse). Dönüşüm
+`config.alpaca_symbol()` içinde tek yerde.
+
+### Kâr al / stop nerede duruyor
+
+| Varlık | Koruma nerede | Neden |
+|---|---|---|
+| **Hisse** | Alpaca'da **bracket emri** | Borsa tarafında durur; bot kapalı olsa bile çalışır |
+| **Kripto** | Bot tarafında (hızlı döngü) | Alpaca kriptoda bracket/stop emri kabul etmiyor |
+
+Kripto seviyeleri `broker_orders` tablosuna yazılır ve 30 saniyelik döngü fiyat
+seviyeye değince market satış gönderir.
+
+### Güvenlik davranışı
+
+Alpaca'dan pozisyon listesi okunamazsa (ağ hatası) sistem "pozisyon var" kabul
+eder ve **yeni emir göndermez** — belirsizlikte mükerrer pozisyon açmaktansa
+beklemek daha güvenli.
 
 ---
 

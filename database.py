@@ -148,6 +148,29 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     reports        TEXT              -- JSON: tüm ajan raporları ve tartışmalar
 );
 
+CREATE TABLE IF NOT EXISTS broker_orders (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    broker            TEXT    NOT NULL DEFAULT 'alpaca',
+    symbol            TEXT    NOT NULL,        -- bizim sembol (BTC/USDT)
+    broker_symbol     TEXT,                    -- Alpaca sembolü (BTC/USD)
+    side              TEXT    NOT NULL,        -- buy | sell
+    notional          REAL,                    -- gönderilen tutar (USD)
+    qty               REAL,
+    submitted_at      TEXT    NOT NULL,
+    broker_order_id   TEXT,
+    client_order_id   TEXT,
+    status            TEXT,                    -- accepted | filled | rejected | error ...
+    filled_qty        REAL,
+    filled_avg_price  REAL,
+    take_profit       REAL,
+    stop_loss         REAL,
+    agent_run_id      INTEGER,                 -- kararı veren kurul toplantısı
+    is_paper          INTEGER NOT NULL DEFAULT 1,
+    error             TEXT,
+    updated_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_broker_orders_symbol ON broker_orders(symbol, id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_symbol ON agent_runs(symbol, id);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
 CREATE INDEX IF NOT EXISTS idx_trades_closed_at ON trades(closed_at);
@@ -523,6 +546,69 @@ def agent_runs_today() -> int:
             "SELECT COUNT(*) AS c FROM agent_runs WHERE started_at >= ?", (today + " 00:00:00",)
         ).fetchone()
     return int(row["c"])
+
+
+# --------------------------------------------------------------------------
+# Broker (Alpaca) emirleri
+# --------------------------------------------------------------------------
+def record_broker_order(symbol: str, side: str, **fields) -> int:
+    """Gönderilen emri kaydeder; id döner."""
+    ensure_db()
+    allowed = ("broker", "broker_symbol", "notional", "qty", "broker_order_id",
+               "client_order_id", "status", "filled_qty", "filled_avg_price",
+               "take_profit", "stop_loss", "agent_run_id", "is_paper", "error")
+    data = {k: v for k, v in fields.items() if k in allowed}
+    data.setdefault("broker", "alpaca")
+    cols = ["symbol", "side", "submitted_at", "updated_at"] + list(data)
+    vals = [symbol, side, utcnow(), utcnow()] + [
+        int(v) if isinstance(v, bool) else v for v in data.values()]
+    with get_connection() as conn:
+        cur = conn.execute(
+            f"INSERT INTO broker_orders ({', '.join(cols)}) "
+            f"VALUES ({', '.join('?' * len(cols))})", vals)
+        return int(cur.lastrowid)
+
+
+def update_broker_order(order_id: int, **fields) -> None:
+    ensure_db()
+    allowed = ("status", "filled_qty", "filled_avg_price", "broker_order_id", "error")
+    data = {k: v for k, v in fields.items() if k in allowed}
+    if not data:
+        return
+    sets = ", ".join(f"{k} = ?" for k in data) + ", updated_at = ?"
+    with get_connection() as conn:
+        conn.execute(f"UPDATE broker_orders SET {sets} WHERE id = ?",
+                     list(data.values()) + [utcnow(), order_id])
+
+
+def get_broker_orders(limit: int = 100, symbol: Optional[str] = None) -> list[dict]:
+    ensure_db()
+    with get_connection() as conn:
+        if symbol:
+            rows = conn.execute(
+                "SELECT * FROM broker_orders WHERE symbol = ? ORDER BY id DESC LIMIT ?",
+                (symbol, int(limit))).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM broker_orders ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def last_open_broker_order(symbol: str) -> Optional[dict]:
+    """
+    Bu sembol için en son ALIM emri, ardından SATIŞ gelmemişse döner.
+    Kripto pozisyonlarının kâr al / stop seviyelerini burada saklıyoruz
+    (Alpaca kriptoda bracket emri kabul etmiyor).
+    """
+    ensure_db()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM broker_orders WHERE symbol = ? ORDER BY id DESC LIMIT 1",
+            (symbol,)).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    return d if d["side"] == "buy" else None
 
 
 # --------------------------------------------------------------------------

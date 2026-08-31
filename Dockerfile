@@ -20,6 +20,7 @@ RUN apt-get update \
 
 # Önce sadece requirements: kod değişince pip katmanı cache'ten gelsin
 COPY requirements.txt ./
+# ccxt (Binance verisi), streamlit (panel), alpaca-py (emir yürütme) burada kurulur
 RUN pip install --no-cache-dir -r requirements.txt
 
 # TradingAgents çoklu ajan kurulu (git submodule olarak geliyor).

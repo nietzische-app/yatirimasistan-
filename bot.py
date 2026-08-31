@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 import agents_engine
+import alpaca_execution
 import config
 import database as db
 
@@ -192,9 +193,22 @@ class TradingBot:
         self._trend_cache: dict[str, tuple[float, Optional[float]]] = {}
         self._council_threads: dict[str, threading.Thread] = {}
         self.council = agents_engine.get_council()
+        self.broker: Optional[alpaca_execution.AlpacaExecutor] = None
         ok, reason = agents_engine.AgentCouncil.readiness()
         log.info("Karar motoru: %s", "TradingAgents kurulu" if ok else f"KAPALI — {reason}")
         db.set_state("decision_engine", "agents" if ok else f"kapalı: {reason}")
+
+        self.backend = alpaca_execution.backend_name()
+        if self.backend == "alpaca":
+            ready, why = alpaca_execution.AlpacaExecutor.readiness()
+            if not ready:
+                log.warning("Alpaca seçildi ama kullanılamıyor (%s); dahili deftere dönülüyor.", why)
+                self.backend = "internal"
+            else:
+                self.broker = alpaca_execution.get_executor()
+        log.info("Emir yürütme: %s", "Alpaca " + ("PAPER" if config.ALPACA_PAPER else "CANLI")
+                 if self.backend == "alpaca" else "dahili sanal defter")
+        db.set_state("execution_backend", self.backend)
         mode = "DEMO (sanal para)" if config.DEMO_MODE else "GERÇEK EMİR"
         if config.OFFLINE_SIMULATION:
             mode += " · OFFLINE SİMÜLASYON"
@@ -352,27 +366,47 @@ class TradingBot:
         self._council_threads[symbol] = t
         t.start()
 
+    def has_position(self, symbol: str) -> bool:
+        """Açık pozisyon kontrolü — hangi yürütme arkasını kullanıyorsak ondan."""
+        if self.backend == "alpaca" and self.broker is not None:
+            try:
+                return self.broker.position_for(symbol) is not None
+            except Exception as exc:
+                log.warning("[%s] Alpaca pozisyonu okunamadı: %s", symbol, exc)
+                return True          # emin değilsek yeni emir GÖNDERME
+        return db.has_open_position(symbol)
+
     def apply_pending_decisions(self, symbol: str, price: float) -> None:
         """Kurulun bitirdiği ama henüz uygulanmamış kararları emre çevirir."""
         for run in db.get_agent_runs(limit=5, symbol=symbol):
             if run["status"] != "OK" or run["executed"]:
                 continue
             action = run["action"]
-            has_position = db.has_open_position(symbol)
+            has_position = self.has_position(symbol)
+            size = run["size_factor"] or 1.0
+            stop = run["proposed_stop"] or price * (1 - config.STOP_LOSS_PCT)
+            target = price * (1 + config.TAKE_PROFIT_PCT)
 
             if action == "BUY" and not has_position:
-                if len(db.get_open_positions()) >= config.MAX_OPEN_POSITIONS:
+                if self.backend == "alpaca":
+                    self.broker.buy(symbol,
+                                    self.broker.position_notional(size),
+                                    take_profit=target, stop_loss=stop,
+                                    agent_run_id=run["id"])
+                elif len(db.get_open_positions()) >= config.MAX_OPEN_POSITIONS:
                     db.add_log("AGENT", f"{symbol}: AL kararı atlandı (pozisyon limiti)", symbol)
                 else:
-                    self.open_trade(
-                        symbol, price,
-                        size_factor=run["size_factor"] or 1.0,
-                        stop_price=run["proposed_stop"],
-                        reason=f"Kurul kararı: {run['rating']}",
-                    )
+                    self.open_trade(symbol, price, size_factor=size,
+                                    stop_price=run["proposed_stop"],
+                                    reason=f"Kurul kararı: {run['rating']}")
+
             elif action == "SELL" and has_position and config.AGENT_EXIT_ON_SELL:
-                for pos in db.get_open_positions(symbol):
-                    self.close_trade(pos, price, f"Kurul kararı: {run['rating']}")
+                if self.backend == "alpaca":
+                    self.broker.sell(symbol, agent_run_id=run["id"],
+                                     reason=f"Kurul kararı: {run['rating']}")
+                else:
+                    for pos in db.get_open_positions(symbol):
+                        self.close_trade(pos, price, f"Kurul kararı: {run['rating']}")
 
             db.mark_agent_run_executed(run["id"])
 
@@ -400,10 +434,19 @@ class TradingBot:
                 ema = None
 
         # 1) Açık pozisyonun korumaları (kâr al / stop)
-        for position in db.get_open_positions(symbol):
-            reason = self.check_exit(position, price)
-            if reason:
-                self.close_trade(position, price, reason)
+        if self.backend == "alpaca":
+            # Hissede bracket emri borsada durur; kriptoda koruma bizde.
+            try:
+                reason = self.broker.check_protective_exit(symbol, price)
+                if reason:
+                    self.broker.sell(symbol, reason=reason)
+            except Exception as exc:
+                log.warning("[%s] Alpaca koruma kontrolü başarısız: %s", symbol, exc)
+        else:
+            for position in db.get_open_positions(symbol):
+                reason = self.check_exit(position, price)
+                if reason:
+                    self.close_trade(position, price, reason)
 
         # 2) Kurulun tamamlanmış kararlarını uygula
         self.apply_pending_decisions(symbol, price)
@@ -412,7 +455,7 @@ class TradingBot:
         self.maybe_convene(symbol, price)
 
         last = db.get_agent_runs(limit=1, symbol=symbol)
-        signal = "POZİSYONDA" if db.has_open_position(symbol) else (
+        signal = "POZİSYONDA" if self.has_position(symbol) else (
             last[0]["action"] if last and last[0]["status"] == "OK" else "BEKLE")
         db.update_market(symbol, price, rsi, ema, signal)
         log.info(

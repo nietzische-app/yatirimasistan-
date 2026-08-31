@@ -125,8 +125,9 @@ AGENT_INTERVAL_MINUTES = max(15, _env_int("AGENT_INTERVAL_MINUTES", 60))
 # Gün başına toplam toplantı üst sınırı (maliyet emniyet supabı, tüm semboller)
 AGENT_MAX_RUNS_PER_DAY = _env_int("AGENT_MAX_RUNS_PER_DAY", 60)
 
-# Tek bir toplantı bu süreyi aşarsa iptal edilir
-AGENT_RUN_TIMEOUT_SECONDS = _env_int("AGENT_RUN_TIMEOUT_SECONDS", 1200)
+# Tek bir toplantı bu süreyi aşarsa iptal edilir.
+# Gözlenen: 4 analist + 2 tur tartışma + 2 tur risk ile ~15-25 dakika.
+AGENT_RUN_TIMEOUT_SECONDS = _env_int("AGENT_RUN_TIMEOUT_SECONDS", 2400)
 
 # --- LLM sağlayıcısı ---
 # OpenRouter / DeepSeek / yerel sunucular OpenAI uyumlu uçtan çalışır:
@@ -178,6 +179,47 @@ def agent_ticker(symbol: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# 3C) EMİR YÜRÜTME: dahili sanal defter mi, Alpaca paper hesabı mı?
+# --------------------------------------------------------------------------
+#   "internal" -> emirler SQLite'taki sanal bakiyede simüle edilir (varsayılan davranış)
+#   "alpaca"   -> emirler Alpaca Paper Trading hesabına gönderilir
+#   "auto"     -> Alpaca anahtarları varsa alpaca, yoksa internal
+EXECUTION_BACKEND = _env_str("EXECUTION_BACKEND", "auto")
+
+ALPACA_API_KEY = _env_str("ALPACA_API_KEY", "")
+ALPACA_SECRET_KEY = _env_str("ALPACA_SECRET_KEY", "")
+# True -> https://paper-api.alpaca.markets (sanal para). Gerçek hesap için False.
+ALPACA_PAPER = _env_bool("ALPACA_PAPER", True)
+
+# Alpaca emirlerinde pozisyon büyüklüğü: hesabın öz sermayesinin yüzdesi
+ALPACA_POSITION_PCT = _env_float("ALPACA_POSITION_PCT", POSITION_SIZE_PCT)
+ALPACA_MAX_NOTIONAL = _env_float("ALPACA_MAX_NOTIONAL", MAX_POSITION_USDT)
+ALPACA_MIN_NOTIONAL = _env_float("ALPACA_MIN_NOTIONAL", 10.0)
+
+# Hisse senetlerinde emir bracket (kâr al + stop) olarak gönderilebilir.
+# Kriptoda Alpaca bracket/stop emri kabul etmez; koruma bot tarafında yapılır.
+ALPACA_USE_BRACKET_FOR_EQUITY = _env_bool("ALPACA_USE_BRACKET_FOR_EQUITY", True)
+# Borsa kapalıyken hisse emri gönderilsin mi (gtc ile sıraya girer)
+ALPACA_ALLOW_QUEUED_EQUITY = _env_bool("ALPACA_ALLOW_QUEUED_EQUITY", True)
+
+
+def alpaca_symbol(symbol: str) -> str:
+    """
+    Bizim sembolümüzü Alpaca'nın beklediği biçime çevirir.
+        BTC/USDT -> BTC/USD   (kripto)
+        NVDA     -> NVDA      (hisse)
+    """
+    if "/" in symbol:
+        base, _, _quote = symbol.partition("/")
+        return f"{base.upper()}/USD"
+    return symbol.upper()
+
+
+def is_crypto(symbol: str) -> bool:
+    return "/" in symbol
+
+
+# --------------------------------------------------------------------------
 # 4) DÖNGÜ / KAYIT AYARLARI
 # --------------------------------------------------------------------------
 LOOP_INTERVAL_SECONDS = _env_int("LOOP_INTERVAL_SECONDS", 30)      # bot kaç saniyede bir piyasayı kontrol etsin
@@ -217,6 +259,10 @@ def summary() -> dict:
         "Döngü": f"{LOOP_INTERVAL_SECONDS} sn",
         "Motor": "panel içinde" if RUN_BOT_IN_DASHBOARD else "ayrı süreç (bot.py)",
         "Karar motoru": ("TradingAgents kurulu" if DECISION_ENGINE == "agents" else "kapalı (manuel)"),
+        "Emir yürütme": (f"Alpaca {'PAPER' if ALPACA_PAPER else 'CANLI'}"
+                         if (EXECUTION_BACKEND == "alpaca"
+                             or (EXECUTION_BACKEND == "auto" and ALPACA_API_KEY))
+                         else "dahili sanal defter"),
         "Kurul sıklığı": f"{AGENT_INTERVAL_MINUTES} dk / sembol (günde en fazla {AGENT_MAX_RUNS_PER_DAY})",
         "Ajanlar": ", ".join(AGENT_ANALYSTS) + f" | tartışma {AGENT_DEBATE_ROUNDS}, risk {AGENT_RISK_ROUNDS} tur",
         "LLM": f"{LLM_DEEP_MODEL} @ {LLM_BACKEND_URL or 'varsayılan'}",

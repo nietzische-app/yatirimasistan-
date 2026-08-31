@@ -457,6 +457,7 @@ API anahtarını üretirken **sadece "Spot & Margin Trading"** yetkisi ver, para
 | `docker compose up` build'de takılıyor | `docker compose build --no-cache` |
 | Build'de `trading_agents` bulunamıyor | `git submodule update --init --recursive` çalıştır |
 | Panelde "Kurul devre dışı: LLM anahtarı yok" | `.env` içine `OPENROUTER_API_KEY` ekle, `docker compose up -d` |
+| Alpaca emirleri reddediliyor | Panelde "Reddedilen emirler" bölümüne bak; genelde alım gücü yetersiz ya da hisse için borsa kapalı |
 | Kurul hep ERROR veriyor | `docker compose logs bot \| grep -i agent` — çoğunlukla kota (429) veya model adı hatası |
 | `Bind for 0.0.0.0:80 failed: port is already allocated` | Başka bir servis 80'i tutuyor. `ss -tlnp \| grep ':80 '` ile bak; yukarıdaki "Sunucuda zaten bir web sunucusu varsa" bölümünü uygula. |
 | Panel açılıyor ama "Connection error" verip donuyor | Ters vekil sunucu WebSocket'i geçirmiyor. nginx'te `Upgrade`/`Connection` başlıklarını ve `proxy_read_timeout 86400;` satırını ekle. |

@@ -5,6 +5,8 @@ numpy>=1.24.0          # indikatör hesapları
 streamlit>=1.36.0      # web paneli
 plotly>=5.18.0         # equity curve grafiği
 
+alpaca-py>=0.42.0      # Alpaca Paper Trading (emir yürütme + portföy)
+
 # --- Yapay zekâ kurulu ---
 # TradingAgents'ın kendisi git submodule olarak gelir ve Dockerfile içinde
 # `pip install ./trading_agents` ile kurulur; langchain/langgraph/yfinance gibi

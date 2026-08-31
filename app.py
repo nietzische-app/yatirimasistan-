@@ -20,6 +20,7 @@ import pandas as pd
 import streamlit as st
 
 import agents_engine
+import alpaca_execution
 import config
 import database as db
 from bot import BotRunner, MarketData, TradingBot
@@ -508,6 +509,86 @@ if trades:
     )
 else:
     st.info("Henüz kapanmış işlem yok.")
+
+# ==========================================================================
+# ALPACA PAPER TRADING HESABI
+# ==========================================================================
+@st.cache_data(ttl=20, show_spinner=False)
+def alpaca_snapshot() -> dict:
+    """Hesap + pozisyonlar (20 sn cache; her rerun'da API'yi yormasın)."""
+    try:
+        ex = alpaca_execution.get_executor()
+        return {"ok": True, "account": ex.account(), "positions": ex.positions()}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+_backend = alpaca_execution.backend_name()
+if _backend == "alpaca" or config.ALPACA_API_KEY:
+    st.divider()
+    st.subheader("🏦 Alpaca Hesabı" + (" · PAPER" if config.ALPACA_PAPER else " · ⚠️ CANLI"))
+    _ok, _why = alpaca_execution.AlpacaExecutor.readiness()
+    if not _ok:
+        st.warning(f"Alpaca kullanılamıyor: {_why}")
+    else:
+        snap = alpaca_snapshot()
+        if not snap["ok"]:
+            st.error(f"Alpaca'ya bağlanılamadı: {snap['error']}")
+        else:
+            acc = snap["account"]
+            a1, a2, a3, a4 = st.columns(4)
+            a1.metric("💼 Portföy Değeri",
+                      f"{acc['equity']:,.2f} {acc['currency']}" if acc["equity"] else "-",
+                      (f"{acc['day_pnl']:+,.2f} ({acc['day_pnl_pct']:+.2f}%)"
+                       if acc["day_pnl"] is not None else "gün verisi yok"))
+            a2.metric("💵 Nakit", f"{acc['cash']:,.2f}" if acc["cash"] else "-",
+                      delta_color="off")
+            a3.metric("🛒 Alım Gücü", f"{acc['buying_power']:,.2f}" if acc["buying_power"] else "-",
+                      delta_color="off")
+            a4.metric("📡 Hesap Durumu", acc["status"] or "-", delta_color="off")
+
+            positions = snap["positions"]
+            st.markdown("**Alpaca Açık Pozisyonlar**")
+            if positions:
+                pos_df = pd.DataFrame([{
+                    "Sembol": p["symbol"],
+                    "Tür": p["asset_class"].replace("AssetClass.", ""),
+                    "Miktar": fmt_qty(p["qty"]),
+                    "Giriş": fmt_price(p["avg_entry_price"]),
+                    "Güncel": fmt_price(p["current_price"]),
+                    "Değer": fmt_money(p["market_value"]),
+                    "K/Z ($)": p["unrealized_pl"],
+                    "K/Z (%)": p["unrealized_plpc"],
+                } for p in positions])
+                render_table(pos_df, {"K/Z ($)": fmt_signed, "K/Z (%)": fmt_pct},
+                             ["K/Z ($)", "K/Z (%)"])
+            else:
+                st.info("Alpaca hesabında açık pozisyon yok.")
+
+    # Gönderilen emirler (kurul kararlarıyla eşleşmiş halde)
+    orders = db.get_broker_orders(limit=50)
+    if orders:
+        st.markdown("**Gönderilen Emirler** (kurul kararlarıyla eşleşmiş)")
+        ord_df = pd.DataFrame([{
+            "Zaman": local_time(o["submitted_at"]),
+            "Sembol": o["broker_symbol"] or o["symbol"],
+            "Yön": (o["side"] or "").upper(),
+            "Tutar": fmt_money(o["notional"]) if o["notional"] else "-",
+            "Adet": fmt_qty(o["qty"]) if o["qty"] else "-",
+            "Doldu @": fmt_price(o["filled_avg_price"]) if o["filled_avg_price"] else "-",
+            "Kâr Al": fmt_price(o["take_profit"]) if o["take_profit"] else "-",
+            "Stop": fmt_price(o["stop_loss"]) if o["stop_loss"] else "-",
+            "Durum": o["status"] or "-",
+            "Kurul #": o["agent_run_id"] if o["agent_run_id"] else "-",
+        } for o in orders])
+        render_table(ord_df, {}, [], height=260)
+        failed = [o for o in orders if o["status"] == "error"]
+        if failed:
+            with st.expander(f"⚠️ Reddedilen emirler ({len(failed)})", expanded=False):
+                for o in failed[:10]:
+                    st.markdown(f"**{local_time(o['submitted_at'])} · {o['symbol']} · "
+                                f"{(o['side'] or '').upper()}**")
+                    st.caption((o.get("error") or "")[:400])
 
 # ==========================================================================
 # YAPAY ZEKÂ KURUL RAPORLARI (TradingAgents)
