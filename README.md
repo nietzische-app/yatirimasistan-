@@ -25,6 +25,7 @@ kontrol paneli.
 ├── docker-compose.yml        # bot + dashboard servisleri, kalıcı volume
 ├── DEPLOY.md                 # Hetzner VPS dağıtım rehberi (adım adım)
 ├── deploy/
+│   ├── setup-caddy.sh             # panele şifre + HTTPS kurar (tek komut)
 │   ├── docker-compose.caddy.yml   # şifre + HTTPS ile yayınlama (opsiyonel)
 │   ├── docker-compose.public.yml  # 8501'i doğrudan açma (opsiyonel)
 │   └── Caddyfile
@@ -85,6 +86,12 @@ düğmesi ayrı terminaldeki botu da kontrol eder.
 cp .env.example .env
 docker compose up -d --build
 ssh -L 8501:localhost:8501 root@SUNUCU_IP   # panele eriş: http://localhost:8501
+```
+
+Paneli kullanıcı adı/şifre ve HTTPS ile internete açmak için:
+
+```bash
+./deploy/setup-caddy.sh
 ```
 
 Hetzner VPS'e sıfırdan kurulum, firewall ve yedekleme adımları için:

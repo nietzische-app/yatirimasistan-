@@ -147,34 +147,83 @@ Dışarıya hiçbir port açılmaz, şifre gerekmez, firewall ayarı gerekmez.
 
 ### B) Kullanıcı adı + şifre + HTTPS (Caddy) — kalıcı erişim için önerilir ✅
 
-```bash
-# Şifre hash'i üret (çıktının tamamını kopyala)
-docker run --rm caddy:2-alpine caddy hash-password --plaintext 'SENIN_SIFREN'
+Panelin önüne [Caddy](https://caddyserver.com) ters vekil sunucusu konur: şifre
+sorar, alan adın varsa sertifikayı da otomatik alır. Kurulum tek komut:
 
-# .env dosyasına ekle
+```bash
+cd /opt/yatirimasistan-
+./deploy/setup-caddy.sh
+```
+
+Script sırayla şunları sorar ve gerisini kendisi yapar:
+
+| Soru | Ne olur |
+|---|---|
+| **Erişim modu** (1/2/3) | aşağıdaki tabloya bak |
+| **Kullanıcı adı** | varsayılan `admin` |
+| **Şifre** (2 kez, ekrana yazılmaz) | bcrypt hash'i üretilir; şifrenin kendisi hiçbir yere kaydedilmez |
+
+Sonra `.env` dosyasını doğru biçimde yazar, hash'in Compose tarafından
+bozulmadan okunduğunu **doğrular** ve servisleri Caddy ile başlatır.
+
+#### Hangi modu seçmeli?
+
+| Mod | Ne zaman | Sonuç |
+|---|---|---|
+| **1 — Alan adım var** | `panel.alanadin.com` gibi bir kaydı sunucunun IP'sine yönlendirdiysen | Let's Encrypt sertifikası otomatik alınır, gerçek HTTPS. **Önerilen.** Portlar: 80 + 443 |
+| **2 — Sadece IP, HTTPS** | Alan adın yok ama trafiğin şifreli olsun istiyorsan | Self-signed sertifika: trafik şifreli, tarayıcı bir kez "güvenli değil" uyarısı verir ("Gelişmiş → Devam et") . Port: 443 |
+| **3 — Sadece IP, düz HTTP** | Sadece geçici deneme | Şifre sorar ama **şifre ağda açık gider**. Kalıcı kullanma. Port: 80 |
+
+> Mod 1 için alan adının A kaydı sunucunun IP'sine bakmalı ve 80/443 portları
+> dışarıdan erişilebilir olmalı — Let's Encrypt doğrulaması bunu gerektirir.
+> Ucuz bir alan adı, panelini kalıcı olarak güvene almanın en kolay yolu.
+
+#### Elle yapmak istersen
+
+```bash
+# 1) Şifre hash'i (şifre komut geçmişine düşmesin diye stdin'den)
+printf '%s\n' 'SIFREN' | docker run --rm -i caddy:2-alpine caddy hash-password
+
+# 2) .env dosyasına ekle
 nano .env
 ```
 
 ```ini
-SITE_ADDRESS=panel.alanadin.com        # alan adın yoksa:  :80
+SITE_ADDRESS=panel.alanadin.com        # mod 2: https://SUNUCU_IP   | mod 3: :80
+CADDY_TLS=                             # mod 2 ise: 'tls internal'
 PANEL_USER=admin
 PANEL_PASSWORD_HASH='$2a$14$....'      # ⚠️ TEK TIRNAK içinde yaz
 ```
 
-> **Tek tırnak neden şart?** bcrypt hash'i `$` içerir ve Docker Compose `.env`
-> içindeki `$` işaretlerini değişken sanıp hash'i bozar (`$2a$14$abc` → `$2a$14`).
-> Tek tırnak bunu engeller. Kontrol etmek için:
-> `docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml config | grep PANEL_PASSWORD_HASH`
-> — çıktıdaki `$$` işaretleri normaldir (Compose kaçış karakteridir), hash'in
-> tamamı görünüyorsa doğrudur.
-
 ```bash
-docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml up -d
+chmod 600 .env
+docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml up -d --build
 ```
 
-Alan adını sunucunun IP'sine yönlendirdiysen Caddy sertifikayı otomatik alır
-(80 ve 443 portlarının açık olması gerekir). Alan adın yoksa `SITE_ADDRESS=:80`
-yaz; şifre sorar ama trafik şifrelenmez.
+> **Tek tırnak neden şart?** bcrypt hash'i `$` içerir ve Docker Compose `.env`
+> içindeki `$` işaretlerini değişken sanıp hash'i kırpar (`$2a$14$abc` → `$2a$14`),
+> sonuçta şifren hiçbir zaman doğrulanmaz. Tek tırnak bunu engeller. Kontrol:
+>
+> ```bash
+> docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml config \
+>   | grep PANEL_PASSWORD_HASH
+> ```
+>
+> Çıktıdaki `$$` işaretleri normaldir (Compose'un kaçış biçimi); hash'in tamamı
+> görünüyorsa doğrudur. `setup-caddy.sh` bu kontrolü senin için yapar.
+
+#### Kurulumdan sonra
+
+```bash
+docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml ps
+docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml logs -f caddy
+```
+
+Tarayıcıdan adrese git; kullanıcı adı/şifre sorulmalı. Şifreyi değiştirmek
+istersen `./deploy/setup-caddy.sh` scriptini tekrar çalıştırman yeterli.
+
+Caddy'yi kullanırken **8501'i internete açma** (aşağıdaki C seçeneği); trafik
+Caddy üzerinden 80/443 ile gelmeli, yoksa şifre atlanmış olur.
 
 ### C) 8501'i doğrudan internete açma — şifresiz ⚠️
 
@@ -200,7 +249,9 @@ Sunucunun dışında, ağ seviyesinde çalışır — Docker'ın kurallarından 
    |---|---|---|
    | TCP | 22 | kendi IP'n `x.x.x.x/32` |
    | TCP | 8501 | kendi IP'n `x.x.x.x/32` *(sadece C seçeneğinde)* |
-   | TCP | 80, 443 | `0.0.0.0/0`, `::/0` *(sadece Caddy kullanıyorsan)* |
+   | TCP | 80, 443 | `0.0.0.0/0`, `::/0` *(Caddy — mod 1)* |
+   | TCP | 443 | `0.0.0.0/0`, `::/0` *(Caddy — mod 2)* |
+   | TCP | 80 | `0.0.0.0/0`, `::/0` *(Caddy — mod 3)* |
 3. **Apply to Resources** → sunucunu seç → **Create Firewall**
 
 Kendi IP'ni öğrenmek için: `curl ifconfig.me`

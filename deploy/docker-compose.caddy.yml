@@ -4,8 +4,11 @@
 #
 #   docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml up -d
 #
+# Kolay yol:  ./deploy/setup-caddy.sh   (soruları yanıtla, gerisini o halleder)
+#
 # .env içinde tanımlanması gerekenler:
-#   SITE_ADDRESS=panel.alanadin.com   # alan adın yoksa:  :80
+#   SITE_ADDRESS=panel.alanadin.com   # alan adın yoksa:  https://SUNUCU_IP  ya da  :80
+#   CADDY_TLS=                        # sadece IP kullanıyorsan: 'tls internal'
 #   PANEL_USER=admin
 #   PANEL_PASSWORD_HASH='$2a$14$...'  # TEK TIRNAK şart (bkz. DEPLOY.md)
 #                                     # docker run --rm caddy:2-alpine caddy hash-password
@@ -22,6 +25,7 @@ services:
       - "443:443"
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      CADDY_TLS: ${CADDY_TLS:-}
       PANEL_USER: ${PANEL_USER:-admin}
       PANEL_PASSWORD_HASH: ${PANEL_PASSWORD_HASH:?deploy/README icin sifre hash gerekli}
     volumes:

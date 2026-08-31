@@ -1,11 +1,22 @@
-# Alan adı verilirse Caddy sertifikayı otomatik alır (Let's Encrypt).
-# Alan adın yoksa .env içinde SITE_ADDRESS=:80 yaz (şifre var ama trafik şifresiz).
+# Panelin önündeki ters vekil sunucu: kullanıcı adı/şifre + (mümkünse) HTTPS.
+#
+# Değişkenler .env dosyasından gelir (deploy/setup-caddy.sh bunları senin için yazar):
+#   SITE_ADDRESS         alan.adin.com | https://SUNUCU_IP | :80
+#   CADDY_TLS            boş | tls internal      (IP'ye self-signed sertifika)
+#   PANEL_USER           admin
+#   PANEL_PASSWORD_HASH  bcrypt hash (.env içinde TEK TIRNAK içinde olmalı)
+
 {$SITE_ADDRESS} {
+	# Alan adı verildiyse bu satır boştur ve Caddy Let's Encrypt sertifikasını
+	# otomatik alır. Sadece IP varsa "tls internal" olur (self-signed).
+	{$CADDY_TLS}
+
 	basic_auth {
 		{$PANEL_USER} {$PANEL_PASSWORD_HASH}
 	}
 
-	# Streamlit WebSocket kullanır; Caddy upgrade'i kendiliğinden geçirir.
+	# Streamlit canlı bağlantı için WebSocket kullanır (/_stcore/stream);
+	# Caddy upgrade başlıklarını kendiliğinden geçirir.
 	reverse_proxy dashboard:8501
 
 	encode gzip
