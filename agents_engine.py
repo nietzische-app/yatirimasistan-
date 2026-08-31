@@ -184,6 +184,17 @@ def _openrouter_get(path: str) -> Optional[dict]:
         return None
 
 
+def summarize_error(message: str) -> str:
+    """Uzun sağlayıcı JSON'larını tek satıra indirger."""
+    low = (message or "").lower()
+    if "rate-limited upstream" in low or "upstream_provider_shared_pool" in low:
+        return ("model sağlayıcısının ortak havuzu geçici olarak tıkalı (429) — "
+                "kendi kotan değil; birazdan tekrar denenecek")
+    if "429" in low:
+        return "hız sınırı (429) — birazdan tekrar denenecek"
+    return (message or "")[:180]
+
+
 def openrouter_credit() -> Optional[dict]:
     """
     Kredi durumu. İki ayrı bilgi var, ikisi de önemli:
@@ -251,6 +262,8 @@ class AgentCouncil:
             "max_debate_rounds": config.AGENT_DEBATE_ROUNDS,
             "max_risk_discuss_rounds": config.AGENT_RISK_ROUNDS,
             "output_language": config.AGENT_OUTPUT_LANGUAGE,
+            # Yarıda kalan toplantı bir sonraki denemede kaldığı yerden devam etsin
+            "checkpoint_enabled": config.AGENT_CHECKPOINT_ENABLED,
             # Ajanların hafızası/önbelleği kalıcı volume'da dursun
             "data_cache_dir": os.path.join(os.path.dirname(config.DB_PATH), "agents_cache"),
             "results_dir": os.path.join(os.path.dirname(config.DB_PATH), "agents_logs"),
@@ -316,15 +329,22 @@ class AgentCouncil:
             return False
         if db.agent_runs_today() >= config.AGENT_MAX_RUNS_PER_DAY:
             return False
-        last = db.last_agent_run_time(symbol)
-        if not last:
+        runs = db.get_agent_runs(limit=1, symbol=symbol)
+        if not runs:
             return True
+        last = runs[0]
         try:
-            started = datetime.strptime(last, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        except ValueError:
+            started = datetime.strptime(last["started_at"], "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc)
+        except (ValueError, TypeError, KeyError):
             return True
-        return datetime.now(timezone.utc) - started >= timedelta(
-            minutes=config.AGENT_INTERVAL_MINUTES)
+
+        # Geçici hatadan sonra tam süreyi beklemek gereksiz: checkpoint sayesinde
+        # tekrar deneme kaldığı yerden devam eder.
+        transient_failure = (last["status"] in ("ERROR", "TIMEOUT")
+                             and not classify_error(last.get("error") or ""))
+        wait = config.AGENT_RETRY_MINUTES if transient_failure else config.AGENT_INTERVAL_MINUTES
+        return datetime.now(timezone.utc) - started >= timedelta(minutes=wait)
 
     # ------------------------------------------------------------- çalıştır
     def analyze(self, symbol: str, price: Optional[float] = None) -> dict:
@@ -371,8 +391,9 @@ class AgentCouncil:
                            f"python bot.py --resume-council", symbol)
                 log.error("[%s] Kurul DURDURULDU — %s", symbol, fatal)
             else:
-                db.add_log("ERROR", f"{symbol}: kurul hatası — {box['error'][:180]}", symbol)
-                log.error("[%s] Kurul hatası: %s", symbol, box["error"])
+                short = summarize_error(box["error"])
+                db.add_log("ERROR", f"{symbol}: kurul hatası — {short}", symbol)
+                log.error("[%s] Kurul hatası: %s", symbol, short)
             result["error"] = box["error"]
             result["fatal"] = fatal
             return result

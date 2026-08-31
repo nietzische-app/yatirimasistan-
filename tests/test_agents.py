@@ -164,6 +164,38 @@ council.analyze("BTC/USDT", price=100.0)
 assert not ae.AgentCouncil.halted(), "geçici hata (429) kurulu durdurmamalı"
 print("✓ geçici hata (429) kurulu durdurmuyor")
 
+# --- 7c) Geçici hatadan sonra kısa sürede tekrar denenir ---------------------
+import database as _db
+_db.init_db()
+with _db.get_connection() as _c:
+    _c.execute("DELETE FROM agent_runs")
+
+_iv0, _rt0 = config.AGENT_INTERVAL_MINUTES, config.AGENT_RETRY_MINUTES
+config.AGENT_INTERVAL_MINUTES, config.AGENT_RETRY_MINUTES = 60, 0
+
+rid = _db.start_agent_run("SOL/USDT", 100.0)
+_db.finish_agent_run(rid, status="ERROR", duration_sec=218.0,
+                     error="OpenAIRateLimitError: 429 rate-limited upstream")
+assert ae.AgentCouncil.due("SOL/USDT"), \
+    "geçici hatadan sonra kısa aralıkla tekrar denenmeli"
+
+with _db.get_connection() as _c:
+    _c.execute("DELETE FROM agent_runs")
+rid2 = _db.start_agent_run("SOL/USDT", 100.0)
+_db.finish_agent_run(rid2, status="OK", rating="Hold", action="HOLD", duration_sec=700.0)
+assert not ae.AgentCouncil.due("SOL/USDT"), \
+    "başarılı toplantıdan sonra tam süre beklenmeli"
+config.AGENT_INTERVAL_MINUTES, config.AGENT_RETRY_MINUTES = _iv0, _rt0
+print("✓ geçici hatada kısa, başarıda tam bekleme aralığı")
+
+# Uzun sağlayıcı hatası tek satıra indirgeniyor
+_long = ("OpenAIRateLimitError: Error code: 429 - {'error': {'metadata': "
+         "{'raw': 'deepseek/deepseek-chat is temporarily rate-limited upstream', "
+         "'limit_source': 'upstream_provider_shared_pool'}}}")
+_short = ae.summarize_error(_long)
+assert "havuz" in _short and len(_short) < 160, _short
+print("✓ sağlayıcı hatası okunur özete indirgeniyor")
+
 # --- 8) Maliyet sınırları ----------------------------------------------------
 _iv = config.AGENT_INTERVAL_MINUTES
 config.AGENT_INTERVAL_MINUTES = 60

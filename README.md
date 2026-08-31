@@ -175,8 +175,15 @@ denemez. `python bot.py --status` sebebi yazar; kredi yükledikten sonra:
 docker compose exec bot python bot.py --resume-council
 ```
 
-Geçici hatalar (429 rate limit, zaman aşımı) kurulu durdurmaz; bir sonraki
-turda tekrar denenir.
+Geçici hatalar (429 rate limit, zaman aşımı) kurulu durdurmaz. Bunlarda tam
+süre beklenmez: `AGENT_RETRY_MINUTES` (10 dk) sonra tekrar denenir ve
+**checkpoint** sayesinde toplantı baştan değil, en son başarılı adımdan devam
+eder — yarıda kalan toplantının parası çöpe gitmez.
+
+Sık görülen bir 429 çeşidi: `rate-limited upstream ... shared_pool`. Bu senin
+kotan değil, OpenRouter'daki modelin ücretsiz havuzunun tıkanmasıdır. Kalıcı
+çözüm: daha az yoğun bir modele geçmek, kendi sağlayıcı anahtarını eklemek
+(BYOK) veya OpenRouter'ın provider routing özelliğini kullanmak.
 
 **Maliyeti düşürme kolları** (etkisi büyükten küçüğe):
 

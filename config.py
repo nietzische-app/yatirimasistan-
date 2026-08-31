@@ -125,6 +125,15 @@ AGENT_INTERVAL_MINUTES = max(15, _env_int("AGENT_INTERVAL_MINUTES", 60))
 # Gün başına toplam toplantı üst sınırı (maliyet emniyet supabı, tüm semboller)
 AGENT_MAX_RUNS_PER_DAY = _env_int("AGENT_MAX_RUNS_PER_DAY", 60)
 
+# Geçici hatadan (429, zaman aşımı) sonra tam süreyi beklemeden tekrar dene.
+# Checkpoint açıkken tekrar deneme kaldığı yerden devam eder, baştan başlamaz.
+AGENT_RETRY_MINUTES = _env_int("AGENT_RETRY_MINUTES", 10)
+
+# TradingAgents checkpoint'i: toplantı ortasında hata alırsa bir sonraki
+# denemede en son başarılı adımdan devam eder. Yarıda kalan toplantının
+# parası ve süresi çöpe gitmez.
+AGENT_CHECKPOINT_ENABLED = _env_bool("AGENT_CHECKPOINT_ENABLED", True)
+
 # Tek bir toplantı bu süreyi aşarsa iptal edilir.
 # Gözlenen: 4 analist + 2 tur tartışma + 2 tur risk ile ~15-25 dakika.
 AGENT_RUN_TIMEOUT_SECONDS = _env_int("AGENT_RUN_TIMEOUT_SECONDS", 2400)
