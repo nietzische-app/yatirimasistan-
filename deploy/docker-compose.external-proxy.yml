@@ -1,0 +1,26 @@
+# ---------------------------------------------------------------------------
+# Sunucuda ZATEN bir ters vekil sunucu container'ı varsa (Caddy, Traefik,
+# nginx-proxy...) ikinci bir tane çalıştırmak yerine paneli ona tanıtırız.
+#
+# Bu overlay, panel container'ını mevcut vekil sunucunun Docker ağına da
+# bağlar; böylece o vekil sunucu paneli "yatirimasistan-panel:8501" adıyla
+# görebilir. Panel yine 127.0.0.1:8501'de de dinlemeye devam eder
+# (SSH tüneliyle erişim bozulmaz).
+#
+# Kullanım:
+#   ./deploy/setup-existing-caddy.sh        # ağı bulur, .env'e yazar, başlatır
+# veya elle:
+#   echo "PROXY_NETWORK=aegis_default" >> .env
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.external-proxy.yml up -d
+# ---------------------------------------------------------------------------
+
+services:
+  dashboard:
+    networks:
+      - default        # bot ile aynı ağ (SQLite paylaşımı için gerekmez ama tutarlı kalsın)
+      - proxy          # mevcut vekil sunucunun ağı
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:?PROXY_NETWORK tanımlı değil - ./deploy/setup-existing-caddy.sh calistir}

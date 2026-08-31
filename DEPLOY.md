@@ -227,17 +227,54 @@ ss -tlnp | grep -E ':80 |:443 '
 docker ps --format '{{.Names}}\t{{.Ports}}'
 ```
 
-`setup-caddy.sh` bu çakışmayı kendisi fark eder ve boş bir port önerir, ama
-doğru çözüm ne bulduğuna bağlı:
+Doğru çözüm ne bulduğuna bağlı:
 
 | Ne çalışıyor | Ne yapmalı |
 |---|---|
-| **nginx / apache / traefik** gibi bir ters vekil sunucu | İkinci bir vekil sunucu çalıştırma. Paneli mevcut olana tanıt (aşağıdaki örnek). |
-| Alakasız bir uygulama (80'i kullanan başka bir container vb.) | Scripti çalıştır; Caddy'yi 443 + boş bir HTTP portuyla kurar. |
-| 443 de dolu | Mevcut vekil sunucuya ekle; script bu durumda alan adı modunu reddeder. |
+| **Bir vekil sunucu container'ı** (Caddy, Traefik, nginx-proxy...) | İkinci bir vekil sunucu çalıştırma; paneli mevcut olana tanıt: `./deploy/setup-existing-caddy.sh` |
+| **Doğrudan sunucuda nginx/apache** | `deploy/nginx-panel.conf.example` ile mevcut nginx'e ekle (aşağıda) |
+| Alakasız bir uygulama (ör. 80'i kullanan başka bir container) | `./deploy/setup-caddy.sh` — çakışmayı görüp boş bir port seçer |
 
-**Mevcut nginx'e eklemek (önerilen yol).** Panel zaten `127.0.0.1:8501`
-adresinde dinliyor, yani Caddy'ye hiç gerek yok:
+---
+
+##### Zaten bir Caddy container'ın varsa (en yaygın durum)
+
+```bash
+cd /opt/yatirimasistan-
+./deploy/setup-existing-caddy.sh
+```
+
+Script sırayla:
+
+1. 80/443'ü yayınlayan container'ı bulur (birden fazlaysa sorar)
+2. O container'ın Docker ağını bulur ve `PROXY_NETWORK` olarak `.env`'e yazar
+3. Paneli o ağa da bağlar — `deploy/docker-compose.external-proxy.yml` overlay'i
+   ile; panel `127.0.0.1:8501`'de dinlemeye de devam eder (SSH tüneli bozulmaz)
+4. Alan adı, kullanıcı adı ve şifre sorar, bcrypt hash'ini üretir
+5. `docker exec` ile mevcut Caddy'nin paneli gerçekten görüp göremediğini test eder
+6. Caddyfile'a eklenecek bloğu yazar; onay verirsen **yedek alıp** ekler,
+   `caddy validate` ile doğrular ve ancak geçerliyse `caddy reload` yapar.
+   Doğrulama başarısızsa yedeği geri yükler ve çalışan Caddy'ye hiç dokunmaz.
+
+Elle yapmak istersen: `deploy/existing-caddy-site.Caddyfile.example` dosyasındaki
+bloğu kendi Caddyfile'ına ekle, `PROXY_NETWORK=<ağ adı>` satırını `.env`'e yaz ve:
+
+```bash
+docker compose -f docker-compose.yml -f deploy/docker-compose.external-proxy.yml up -d
+docker exec <caddy-container> caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker exec <caddy-container> caddy reload   --config /etc/caddy/Caddyfile
+```
+
+> Panel container'ı mevcut Caddy ile **aynı Docker ağına** bağlandığı için
+> `reverse_proxy yatirimasistan-panel:8501` adıyla erişilir. Panel host'ta
+> yalnızca `127.0.0.1`'e bağlı olduğundan, ağa bağlanmadan `172.17.0.1:8501`
+> gibi bir adresle erişmeye çalışmak işe yaramaz.
+
+---
+
+##### Doğrudan sunucuda nginx varsa
+
+Panel zaten `127.0.0.1:8501` adresinde dinliyor, yani Caddy'ye hiç gerek yok:
 
 ```bash
 # Şifre dosyası

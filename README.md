@@ -26,8 +26,11 @@ kontrol paneli.
 ├── DEPLOY.md                 # Hetzner VPS dağıtım rehberi (adım adım)
 ├── deploy/
 │   ├── setup-caddy.sh             # panele şifre + HTTPS kurar (tek komut)
+│   ├── setup-existing-caddy.sh    # sunucuda zaten Caddy varsa ona tanıtır
 │   ├── docker-compose.caddy.yml   # şifre + HTTPS ile yayınlama (opsiyonel)
 │   ├── docker-compose.public.yml  # 8501'i doğrudan açma (opsiyonel)
+│   ├── docker-compose.external-proxy.yml  # mevcut vekil sunucunun ağına bağlanma
+│   ├── existing-caddy-site.Caddyfile.example
 │   ├── nginx-panel.conf.example   # sunucuda zaten nginx varsa
 │   └── Caddyfile
 ├── .env.example              # Gerçek moda geçerken kullanılacak şablon

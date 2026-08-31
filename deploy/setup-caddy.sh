@@ -149,10 +149,10 @@ if [ "$PRIMARY" = "https" ] && OWNER="$(port_owner 443)"; then
     red "servisteyken alan adı modu kurulamaz."
     echo
     echo "Seçeneklerin:"
-    echo "  * O servis bir ters vekil sunucu ise (nginx/apache/traefik), ikinci bir"
-    echo "    vekil sunucu çalıştırma; paneli ona tanıt."
-    echo "    -> DEPLOY.md 'Sunucuda zaten bir web sunucusu varsa' bölümü"
-    echo "       (hazır örnek: deploy/nginx-panel.conf.example)"
+    echo "  * O bir vekil sunucu CONTAINER'ı ise (Caddy/Traefik/nginx-proxy):"
+    echo "      ./deploy/setup-existing-caddy.sh"
+    echo "    Paneli mevcut vekil sunucuya tanıtır; ikinci bir tane gerekmez."
+    echo "  * Doğrudan sunucuda nginx varsa: deploy/nginx-panel.conf.example"
     echo "  * Ya da bu scripti 2. modla (IP + self-signed) çalıştır; farklı bir port seçer."
     exit 1
   fi

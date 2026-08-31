@@ -1,0 +1,19 @@
+# Sunucuda zaten çalışan Caddy'nin Caddyfile'ına EKLENECEK blok.
+# (Kendi Caddyfile'ını bul:  docker inspect <caddy-container> \
+#    --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}')
+#
+# ADRES, KULLANICI ve HASH'i kendi değerlerinle değiştir.
+# Hash'i üret:  printf '%s\n' 'SIFREN' | docker run --rm -i caddy:2-alpine caddy hash-password
+#
+# Not: Buradaki $ işaretleri olduğu gibi kalır — Caddyfile'da kaçış gerekmez.
+# (Tek tırnak kuralı yalnızca Docker Compose'un .env dosyası için geçerliydi.)
+
+panel.alanadin.com {
+	basic_auth {
+		admin $2a$14$BURAYA_KENDI_HASHIN
+	}
+
+	# Panel container'ı, bu Caddy ile aynı Docker ağına bağlandığı için
+	# adıyla erişilebilir (deploy/docker-compose.external-proxy.yml bunu yapar).
+	reverse_proxy yatirimasistan-panel:8501
+}
