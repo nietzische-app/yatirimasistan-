@@ -98,15 +98,25 @@ docker compose version >/dev/null 2>&1 || { red "docker compose eklentisi yok. D
 
 bold "Panel erişim modu"
 cat <<'MENU'
-  1) Alan adım var          -> otomatik HTTPS (Let's Encrypt). ÖNERİLEN.
-                               Alan adının A kaydı sunucunun IP'sine bakmalı,
-                               80 ve 443 portları dışarı açık olmalı.
-  2) Sadece IP + HTTPS      -> self-signed sertifika. Trafik şifreli ama
-                               tarayıcı "güvenli değil" uyarısı verir (1 kez onaylarsın).
-  3) Sadece IP + düz HTTP   -> şifre sorar ama trafik şifresizdir; şifren
-                               ağda açık gider. Sadece geçici kullan.
+  1) Kendi alan adım var      -> otomatik HTTPS (Let's Encrypt).
+                                 Alan adının A kaydı sunucunun IP'sine bakmalı.
+  2) Alan adım yok (sslip.io) -> IP'den ücretsiz bir alan adı türetilir
+                                 (ör. panel-5-9-1-2.sslip.io) ve gerçek
+                                 Let's Encrypt sertifikası alınır. ÖNERİLEN.
+  3) Sadece IP + HTTPS        -> self-signed sertifika. Trafik şifreli ama
+                                 tarayıcı bir kez "güvenli değil" uyarısı verir.
+  4) Sadece IP + düz HTTP     -> şifre sorar ama trafik şifresizdir; şifren
+                                 ağda açık gider. Sadece geçici kullan.
 MENU
-read -rp "Seçim [1-3]: " MODE
+read -rp "Seçim [1-4]: " MODE
+
+ask_ip() {
+  local d
+  d="$(curl -fsS --max-time 10 https://ifconfig.me 2>/dev/null || true)"
+  read -rp "Sunucunun genel IP'si [${d:-}]: " IP
+  IP="${IP:-$d}"
+  [ -n "$IP" ] || { red "IP boş olamaz."; exit 1; }
+}
 
 case "$MODE" in
   1)
@@ -116,14 +126,20 @@ case "$MODE" in
     PORTS="80 ve 443"
     ;;
   2)
-    read -rp "Sunucu IP adresi: " IP
-    [ -n "$IP" ] || { red "IP boş olamaz."; exit 1; }
+    ask_ip
+    case "$IP" in *[!0-9.]*) red "Geçerli bir IPv4 adresi gir (ör. 5.9.1.2)."; exit 1 ;; esac
+    DOMAIN="panel-${IP//./-}.sslip.io"
+    echo "Kullanılacak alan adı: $DOMAIN  (sslip.io bunu $IP adresine çözer)"
+    SITE_ADDRESS="$DOMAIN"; CADDY_TLS=""; URL="https://$DOMAIN"
+    PORTS="80 ve 443"
+    ;;
+  3)
+    ask_ip
     SITE_ADDRESS="https://$IP"; CADDY_TLS="tls internal"; URL="https://$IP"
     PORTS="443"
     ;;
-  3)
-    read -rp "Sunucu IP adresi: " IP
-    [ -n "$IP" ] || { red "IP boş olamaz."; exit 1; }
+  4)
+    ask_ip
     SITE_ADDRESS=":80"; CADDY_TLS=""; URL="http://$IP"
     PORTS="80"
     ;;
@@ -139,11 +155,11 @@ CADDY_HTTP_PORT=80
 CADDY_HTTPS_PORT=443
 
 # Panele erişilecek asıl port moda göre değişir
-if [ "$MODE" = "3" ]; then PRIMARY=http; else PRIMARY=https; fi
+if [ "$MODE" = "4" ]; then PRIMARY=http; else PRIMARY=https; fi
 
 # --- 1) Asıl port ---
 if [ "$PRIMARY" = "https" ] && OWNER="$(port_owner 443)"; then
-  if [ "$MODE" = "1" ]; then
+  if [ "$MODE" = "1" ] || [ "$MODE" = "2" ]; then
     red "443 portunu $OWNER kullanıyor."
     red "Let's Encrypt sertifikası 443 üzerinden doğrulanır; bu port başka bir"
     red "servisteyken alan adı modu kurulamaz."
@@ -153,7 +169,7 @@ if [ "$PRIMARY" = "https" ] && OWNER="$(port_owner 443)"; then
     echo "      ./deploy/setup-existing-caddy.sh"
     echo "    Paneli mevcut vekil sunucuya tanıtır; ikinci bir tane gerekmez."
     echo "  * Doğrudan sunucuda nginx varsa: deploy/nginx-panel.conf.example"
-    echo "  * Ya da bu scripti 2. modla (IP + self-signed) çalıştır; farklı bir port seçer."
+    echo "  * Ya da bu scripti 3. modla (IP + self-signed) çalıştır; farklı bir port seçer."
     exit 1
   fi
   ALT="$(first_free_port 8443 9443 10443 || true)"
@@ -179,10 +195,11 @@ if [ "$PRIMARY" = "https" ]; then
       ALT="${ALT:-18080}"
     fi
     CADDY_HTTP_PORT="$ALT"
-    [ "$MODE" = "1" ] && PORTS="443"
+    { [ "$MODE" = "1" ] || [ "$MODE" = "2" ]; } && PORTS="443"
     echo "Not: 80 portunu $OWNER kullanıyor; Caddy onun yerine $CADDY_HTTP_PORT portunu alacak."
     echo "     Sonuç: http:// adresi otomatik https:// ye yönlenmez; adresi https:// ile yaz."
-    [ "$MODE" = "1" ] && echo "     Sertifika 443 üzerinden (TLS-ALPN) alınacağı için bu sorun olmaz."
+    { [ "$MODE" = "1" ] || [ "$MODE" = "2" ]; } && \
+      echo "     Sertifika 443 üzerinden (TLS-ALPN) alınacağı için bu sorun olmaz."
   fi
 else
   # Mod 3'te HTTPS portu kullanılmaz ama Compose yine de yayınlar.
@@ -251,6 +268,7 @@ echo "  Açık olması gereken portlar: $PORTS"
 echo
 echo "Sonraki adımlar:"
 echo "  * Hetzner Cloud Firewall'da $PORTS portunu aç (DEPLOY.md bölüm 7)."
-[ "$MODE" = "3" ] && echo "  * ⚠️  Trafik şifresiz; kalıcı kullanım için alan adı alıp 1. seçeneğe geç."
-[ "$MODE" = "2" ] && echo "  * Tarayıcı sertifika uyarısı verecek; 'Gelişmiş -> Devam et' ile geç."
+[ "$MODE" = "4" ] && echo "  * ⚠️  Trafik şifresiz; kalıcı kullanım için 2. seçeneğe (sslip.io) geç."
+[ "$MODE" = "3" ] && echo "  * Tarayıcı sertifika uyarısı verecek; 'Gelişmiş -> Devam et' ile geç."
+[ "$MODE" = "2" ] && echo "  * Adres sslip.io üzerinden IP'ne çözülür; sertifika gerçektir."
 echo "  * Logları izle:  ${COMPOSE[*]} logs -f caddy"

@@ -1,19 +1,52 @@
 # Sunucuda zaten çalışan Caddy'nin Caddyfile'ına EKLENECEK blok.
-# (Kendi Caddyfile'ını bul:  docker inspect <caddy-container> \
+# (Caddyfile'ını bul:  docker inspect <caddy-container> \
 #    --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}')
 #
-# ADRES, KULLANICI ve HASH'i kendi değerlerinle değiştir.
-# Hash'i üret:  printf '%s\n' 'SIFREN' | docker run --rm -i caddy:2-alpine caddy hash-password
+# Hash'i üret:
+#   printf '%s\n' 'SIFREN' | docker run --rm -i caddy:2-alpine caddy hash-password
 #
 # Not: Buradaki $ işaretleri olduğu gibi kalır — Caddyfile'da kaçış gerekmez.
 # (Tek tırnak kuralı yalnızca Docker Compose'un .env dosyası için geçerliydi.)
+#
+# Panel container'ı bu Caddy ile aynı Docker ağına bağlandığı için adıyla
+# erişilir (deploy/docker-compose.external-proxy.yml bunu yapar).
+#
+# Aşağıdaki ÜÇ seçenekten birini kullan.
 
+# ---------------------------------------------------------------------------
+# 1) Kendi alan adın varsa — gerçek HTTPS, uyarısız
+# ---------------------------------------------------------------------------
 panel.alanadin.com {
 	basic_auth {
 		admin $2a$14$BURAYA_KENDI_HASHIN
 	}
-
-	# Panel container'ı, bu Caddy ile aynı Docker ağına bağlandığı için
-	# adıyla erişilebilir (deploy/docker-compose.external-proxy.yml bunu yapar).
 	reverse_proxy yatirimasistan-panel:8501
 }
+
+# ---------------------------------------------------------------------------
+# 2) Alan adın YOKSA — sslip.io (ÖNERİLEN)
+#    sslip.io, "panel-5-9-1-2.sslip.io" gibi adları 5.9.1.2 IP'sine çözen
+#    ücretsiz bir DNS servisidir. Kayıt olmak veya DNS kaydı açmak gerekmez.
+#    Gerçek bir alan adı olduğu için Caddy Let's Encrypt sertifikası alabilir
+#    -> tarayıcı uyarısı YOK.
+#    Sunucunun IP'sindeki noktaları tire yap:  5.9.1.2 -> 5-9-1-2
+# ---------------------------------------------------------------------------
+# panel-5-9-1-2.sslip.io {
+# 	basic_auth {
+# 		admin $2a$14$BURAYA_KENDI_HASHIN
+# 	}
+# 	reverse_proxy yatirimasistan-panel:8501
+# }
+
+# ---------------------------------------------------------------------------
+# 3) Alan adın yoksa ve sslip.io'ya bağımlı olmak istemiyorsan — düz IP
+#    Trafik şifreli ama sertifika kendinden imzalı: tarayıcı bir kez
+#    "güvenli değil" uyarısı verir ("Gelişmiş -> Devam et").
+# ---------------------------------------------------------------------------
+# https://5.9.1.2 {
+# 	tls internal
+# 	basic_auth {
+# 		admin $2a$14$BURAYA_KENDI_HASHIN
+# 	}
+# 	reverse_proxy yatirimasistan-panel:8501
+# }

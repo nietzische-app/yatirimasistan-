@@ -170,13 +170,19 @@ bozulmadan okunduğunu **doğrular** ve servisleri Caddy ile başlatır.
 
 | Mod | Ne zaman | Sonuç |
 |---|---|---|
-| **1 — Alan adım var** | `panel.alanadin.com` gibi bir kaydı sunucunun IP'sine yönlendirdiysen | Let's Encrypt sertifikası otomatik alınır, gerçek HTTPS. **Önerilen.** Portlar: 80 + 443 |
-| **2 — Sadece IP, HTTPS** | Alan adın yok ama trafiğin şifreli olsun istiyorsan | Self-signed sertifika: trafik şifreli, tarayıcı bir kez "güvenli değil" uyarısı verir ("Gelişmiş → Devam et") . Port: 443 |
-| **3 — Sadece IP, düz HTTP** | Sadece geçici deneme | Şifre sorar ama **şifre ağda açık gider**. Kalıcı kullanma. Port: 80 |
+| **1 — Kendi alan adım var** | `panel.alanadin.com` kaydını sunucunun IP'sine yönlendirdiysen | Let's Encrypt sertifikası otomatik alınır, gerçek HTTPS. Portlar: 80 + 443 |
+| **2 — Alan adım yok (sslip.io)** | Alan adı satın almadıysan | IP'den ücretsiz bir alan adı türetilir (`panel-5-9-1-2.sslip.io`) ve **gerçek** Let's Encrypt sertifikası alınır — tarayıcı uyarısı yok. **Önerilen.** Portlar: 80 + 443 |
+| **3 — Sadece IP, HTTPS** | sslip.io gibi bir servise bağımlı olmak istemiyorsan | Self-signed sertifika: trafik şifreli, tarayıcı bir kez "güvenli değil" uyarısı verir. Port: 443 |
+| **4 — Sadece IP, düz HTTP** | Sadece geçici deneme | Şifre sorar ama **şifre ağda açık gider**. Kalıcı kullanma. Port: 80 |
 
-> Mod 1 için alan adının A kaydı sunucunun IP'sine bakmalı ve 80/443 portları
-> dışarıdan erişilebilir olmalı — Let's Encrypt doğrulaması bunu gerektirir.
-> Ucuz bir alan adı, panelini kalıcı olarak güvene almanın en kolay yolu.
+> **sslip.io nedir?** `5-9-1-2.sslip.io` gibi adları `5.9.1.2` IP'sine çözen
+> ücretsiz bir joker DNS servisidir; kayıt olmak veya DNS kaydı açmak gerekmez.
+> Gerçek bir alan adı olduğu için Let's Encrypt sertifika verebilir. Karşılığında
+> adresin okunabilirliği düşük olur ve dışarıdaki bir servise bağımlı kalırsın;
+> kalıcı bir kurulum için ucuz bir alan adı yine de en iyisi.
+
+> Mod 1 ve 2'de 80/443 portları dışarıdan erişilebilir olmalı — Let's Encrypt
+> doğrulaması bunu gerektirir.
 
 #### Elle yapmak istersen
 
@@ -250,7 +256,13 @@ Script sırayla:
 2. O container'ın Docker ağını bulur ve `PROXY_NETWORK` olarak `.env`'e yazar
 3. Paneli o ağa da bağlar — `deploy/docker-compose.external-proxy.yml` overlay'i
    ile; panel `127.0.0.1:8501`'de dinlemeye de devam eder (SSH tüneli bozulmaz)
-4. Alan adı, kullanıcı adı ve şifre sorar, bcrypt hash'ini üretir
+4. Panelin adresini sorar — **alan adın yoksa sorun değil:**
+   - Kendi alan adın varsa onu yaz
+   - Yoksa **sslip.io** seçeneğini seç: IP'nden `panel-5-9-1-2.sslip.io` gibi
+     ücretsiz bir alan adı türetir ve gerçek Let's Encrypt sertifikası alınır
+   - Ya da düz IP + self-signed (tarayıcı bir kez uyarır)
+
+   Ardından kullanıcı adı ve şifre sorar, bcrypt hash'ini üretir
 5. `docker exec` ile mevcut Caddy'nin paneli gerçekten görüp göremediğini test eder
 6. Caddyfile'a eklenecek bloğu yazar; onay verirsen **yedek alıp** ekler,
    `caddy validate` ile doğrular ve ancak geçerliyse `caddy reload` yapar.

@@ -82,9 +82,49 @@ fi
 echo "Ağ: $PROXY_NETWORK"
 set_env PROXY_NETWORK "$PROXY_NETWORK"
 
-# --- 3) Alan adı + şifre ----------------------------------------------------
-read -rp "Panelin alan adı (örn. panel.alanadin.com): " PANEL_DOMAIN
-[ -n "$PANEL_DOMAIN" ] || { red "Alan adı boş olamaz."; exit 1; }
+# --- 3) Panelin adresi ------------------------------------------------------
+bold "Panele hangi adresten erişeceksin?"
+cat <<'MENU'
+  1) Kendi alan adım var        -> panel.alanadin.com gibi. Gerçek HTTPS.
+  2) Alan adım yok (sslip.io)   -> IP'den otomatik bir alan adı türetilir
+                                   (ör. 5-9-1-2.sslip.io). Ücretsiz, kayıt
+                                   gerekmez, Let's Encrypt sertifikası alınır.
+                                   ÖNERİLEN.
+  3) Alan adım yok (düz IP)     -> https://SUNUCU_IP, self-signed sertifika.
+                                   Trafik şifreli ama tarayıcı uyarı verir.
+MENU
+read -rp "Seçim [1-3]: " ADDR_MODE
+SITE_TLS=""
+
+case "$ADDR_MODE" in
+  1)
+    read -rp "Alan adı (örn. panel.alanadin.com): " PANEL_DOMAIN
+    [ -n "$PANEL_DOMAIN" ] || { red "Alan adı boş olamaz."; exit 1; }
+    SITE_ADDR="$PANEL_DOMAIN"
+    ;;
+  2)
+    DEFAULT_IP="$(curl -fsS --max-time 10 https://ifconfig.me 2>/dev/null || true)"
+    read -rp "Sunucunun genel IP'si [${DEFAULT_IP:-}]: " IP
+    IP="${IP:-$DEFAULT_IP}"
+    [ -n "$IP" ] || { red "IP boş olamaz."; exit 1; }
+    case "$IP" in
+      *[!0-9.]*|"") red "Geçerli bir IPv4 adresi gir (ör. 5.9.1.2)."; exit 1 ;;
+    esac
+    PANEL_DOMAIN="panel-${IP//./-}.sslip.io"
+    SITE_ADDR="$PANEL_DOMAIN"
+    echo "Kullanılacak alan adı: $PANEL_DOMAIN"
+    echo "(sslip.io bu adı $IP adresine çözer; ayrıca bir DNS kaydı gerekmez.)"
+    ;;
+  3)
+    read -rp "Sunucunun genel IP'si: " IP
+    [ -n "$IP" ] || { red "IP boş olamaz."; exit 1; }
+    PANEL_DOMAIN="$IP"
+    SITE_ADDR="https://$IP"
+    SITE_TLS=$'\n\ttls internal'
+    ;;
+  *) red "Geçersiz seçim."; exit 1 ;;
+esac
+
 read -rp "Panel kullanıcı adı [admin]: " PANEL_USER; PANEL_USER="${PANEL_USER:-admin}"
 read -rsp "Panel şifresi (en az 8 karakter): " PASS; echo
 read -rsp "Şifre (tekrar): " PASS2; echo
@@ -116,7 +156,7 @@ SNIPPET_FILE="$(mktemp)"
 cat > "$SNIPPET_FILE" <<EOF
 
 # --- Yatirim Asistani paneli (yatirimasistan-) ---
-$PANEL_DOMAIN {
+${SITE_ADDR} {${SITE_TLS}
 	basic_auth {
 		$PANEL_USER $HASH
 	}
@@ -179,6 +219,8 @@ fi
 echo
 grn "Kurulum tamam."
 echo "  Adres     : https://$PANEL_DOMAIN"
+[ "$ADDR_MODE" = "3" ] && echo "  Not       : Tarayıcı sertifika uyarısı verecek; 'Gelişmiş -> Devam et'."
+[ "$ADDR_MODE" = "2" ] && echo "  Not       : Adres sslip.io üzerinden IP'ne çözülür; sertifika gerçektir."
 echo "  Kullanıcı : $PANEL_USER"
 echo "  Yedek     : $BACKUP"
 echo
