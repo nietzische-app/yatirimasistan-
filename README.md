@@ -111,6 +111,7 @@ Hetzner VPS'e sıfırdan kurulum, firewall ve yedekleme adımları için:
 ### Faydalı komutlar
 
 ```bash
+python bot.py --status      # sistemin tam durumu (kurul, Alpaca, emirler, piyasa)
 python bot.py --once        # tek tur tarayıp çık
 python bot.py --force       # panel "durduruldu" olsa bile çalış
 python bot.py --simulate    # internet olmadan sentetik fiyatlarla dene

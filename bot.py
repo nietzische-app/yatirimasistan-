@@ -549,6 +549,105 @@ class BotRunner(threading.Thread):
 
 
 # ==========================================================================
+# DURUM ÖZETİ
+# ==========================================================================
+def print_status() -> None:
+    """`python bot.py --status` — tek bakışta sistemin neresinde olduğumuz."""
+    from datetime import datetime, timezone
+
+    db.init_db()
+    line = "─" * 66
+
+    def age(ts: Optional[str]) -> str:
+        if not ts:
+            return "hiç"
+        try:
+            t = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return ts
+        mins = (datetime.now(timezone.utc) - t).total_seconds() / 60
+        return f"{mins:.0f} dk önce" if mins < 90 else f"{mins / 60:.1f} saat önce"
+
+    print(f"\n{line}\n  DURUM ÖZETİ\n{line}")
+    print(f"  Bot çalışıyor mu   : {'EVET' if db.is_bot_running() else 'HAYIR (panelden Başlat)'}")
+    print(f"  Son tarama         : {age(db.get_state('last_run'))}")
+    print(f"  Mod                : {'DEMO (sanal para)' if config.DEMO_MODE else 'GERÇEK EMİR'}")
+
+    ok, reason = agents_engine.AgentCouncil.readiness()
+    print(f"\n  Karar motoru       : {'TradingAgents kurulu' if ok else 'KAPALI'}")
+    if not ok:
+        print(f"    └─ {reason}")
+    else:
+        print(f"    ├─ analistler    : {', '.join(config.AGENT_ANALYSTS)}")
+        print(f"    ├─ model         : {config.LLM_DEEP_MODEL}")
+        print(f"    ├─ sıklık        : {config.AGENT_INTERVAL_MINUTES} dk/sembol, "
+              f"günde en fazla {config.AGENT_MAX_RUNS_PER_DAY}")
+        print(f"    └─ bugünkü koşu  : {db.agent_runs_today()}")
+
+    backend = alpaca_execution.backend_name()
+    print(f"\n  Emir yürütme       : ", end="")
+    if backend == "alpaca":
+        aok, awhy = alpaca_execution.AlpacaExecutor.readiness()
+        print(f"Alpaca {'PAPER' if config.ALPACA_PAPER else 'CANLI'}")
+        if not aok:
+            print(f"    └─ KULLANILAMIYOR: {awhy}")
+        else:
+            try:
+                ex = alpaca_execution.get_executor()
+                acc = ex.account()
+                print(f"    ├─ hesap         : {acc['status']} | equity "
+                      f"{acc['equity']:,.2f} {acc['currency']} | nakit {acc['cash']:,.2f}")
+                print(f"    ├─ emir tutarı   : ~{ex.position_notional(1.0):,.2f} "
+                      f"(pay %{config.ALPACA_POSITION_PCT * 100:g}, tavan "
+                      f"{config.ALPACA_MAX_NOTIONAL:,.0f})")
+                positions = ex.positions()
+                print(f"    └─ pozisyon      : {len(positions)}")
+                for p in positions:
+                    print(f"        {p['symbol']}: {p['qty']} @ {p['avg_entry_price']:,.2f} "
+                          f"-> {p['unrealized_pl']:+,.2f} ({p['unrealized_plpc']:+.2f}%)")
+            except Exception as exc:
+                print(f"    └─ hesap okunamadı: {exc}")
+    else:
+        stats = db.get_stats()
+        print("dahili sanal defter")
+        print(f"    ├─ bakiye        : {stats['balance']:,.2f} {config.QUOTE_CURRENCY}")
+        print(f"    └─ açık pozisyon : {stats['open_positions']}")
+
+    runs = db.get_agent_runs(limit=5)
+    print(f"\n  Son kurul toplantıları ({len(runs)}):")
+    if not runs:
+        print("    henüz yok — ilk toplantı için:  python bot.py --convene BTC/USDT")
+    for r in runs:
+        extra = f" -> {r['action']}" if r["action"] else ""
+        applied = " ✓uygulandı" if r["executed"] else (" ⏳bekliyor" if r["status"] == "OK" else "")
+        dur = f" [{r['duration_sec']:.0f} sn]" if r["duration_sec"] else ""
+        print(f"    {age(r['started_at']):>14} · {r['symbol']:<9} · {r['status']:<7}"
+              f" {r['rating'] or '-'}{extra}{dur}{applied}")
+        if r["status"] in ("ERROR", "TIMEOUT") and r.get("error"):
+            print(f"        └─ {r['error'][:110]}")
+
+    orders = db.get_broker_orders(limit=5)
+    if orders:
+        print(f"\n  Son emirler ({len(orders)}):")
+        for o in orders:
+            amount = (f"{o['notional']:,.0f} USD" if o["notional"]
+                      else f"{o['qty']} adet" if o["qty"] else "-")
+            print(f"    {age(o['submitted_at']):>14} · {o['broker_symbol'] or o['symbol']:<9} · "
+                  f"{(o['side'] or '').upper():<4} {amount:<12} {o['status']}")
+            if o["status"] == "error" and o.get("error"):
+                print(f"        └─ {o['error'][:110]}")
+
+    market = db.get_market()
+    if market:
+        print(f"\n  Piyasa:")
+        for sym, m in market.items():
+            print(f"    {sym:<9} {m['price']:>12,.2f}  RSI "
+                  f"{m['rsi'] if m['rsi'] is None else round(m['rsi'], 1):<6} "
+                  f"({age(m['updated_at'])})")
+    print(f"{line}\n")
+
+
+# ==========================================================================
 # CLI
 # ==========================================================================
 def main() -> None:
@@ -562,6 +661,8 @@ def main() -> None:
                         help="Sanal bakiyeyi sıfırlayıp çık")
     parser.add_argument("--convene", metavar="SEMBOL", nargs="?", const="",
                         help="Kurulu hemen topla (sıklık sınırını atlar) ve çık")
+    parser.add_argument("--status", action="store_true",
+                        help="Sistemin tam durumunu yazdır ve çık")
     args = parser.parse_args()
 
     if args.simulate:
@@ -572,6 +673,10 @@ def main() -> None:
     if args.reset:
         db.reset_account()
         print(f"Bakiye sıfırlandı: {config.INITIAL_BALANCE:,.2f} {config.QUOTE_CURRENCY}")
+        return
+
+    if args.status:
+        print_status()
         return
 
     bot = TradingBot()
