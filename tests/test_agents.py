@@ -275,4 +275,57 @@ assert "RSI_BUY_THRESHOLD" not in inspect.getsource(bot_module), \
     "bot.py hâlâ RSI eşiğiyle karar veriyor"
 print("✓ eski RSI/EMA al-sat kuralları bot.py'den kalkmış")
 
+# --- 8) Yarıda kalan kayıt döngüde de süpürülmeli -------------------------
+# Canlı sistemde görülen: süreç bir toplantının TAM ORTASINDA yeniden başladı,
+# açılıştaki süpürme kaydı henüz bayat olmadığı için atladı ve kayıt 76
+# dakika boyunca "RUNNING" kaldı.
+import database as _db2
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+_db2.init_db()
+eski = (_dt.now(_tz.utc) - _td(seconds=config.AGENT_RUN_TIMEOUT_SECONDS + 600)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+takılı = _db2.start_agent_run("DOT/USDT", 0.87)
+with _db2.get_connection() as _c:
+    _c.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", (eski, takılı))
+
+assert _db2.get_agent_run(takılı)["status"] == "RUNNING"
+# Takılı RUNNING kaydı üç yerde birden zarar veriyordu:
+assert not ae.AgentCouncil.due("DOT/USDT"), \
+    "takılı kayıt varken due() tam aralığı bekliyor (hatanın kendisi)"
+
+bot2 = TradingBot()
+bot2._last_sweep = 0.0          # açılış süpürmesinden hemen sonrasını taklit et
+bot2.sweep_stale_runs()
+kapandı = _db2.get_agent_run(takılı)
+assert kapandı["status"] == "TIMEOUT", kapandı["status"]
+assert ae.AgentCouncil.due("DOT/USDT"), \
+    "süpürüldükten sonra TIMEOUT sayılıp kısa aralıkta tekrar denenmeli"
+print("✓ döngüdeki süpürme takılı kaydı kapatıyor ve sembolü serbest bırakıyor")
+
+# Süpürme kısılmalı: her turda (30 sn) UPDATE atmasın
+çağrı = {"n": 0}
+_orig_sweep = _db2.sweep_stale_agent_runs
+_db2.sweep_stale_agent_runs = lambda *a, **k: (çağrı.__setitem__("n", çağrı["n"] + 1), 0)[1]
+try:
+    bot2._last_sweep = 0.0
+    bot2.sweep_stale_runs()
+    bot2.sweep_stale_runs()          # hemen ardından: atlanmalı
+    assert çağrı["n"] == 1, f"süpürme kısılmamış: {çağrı['n']} çağrı"
+finally:
+    _db2.sweep_stale_agent_runs = _orig_sweep
+print(f"✓ süpürme {TradingBot.SWEEP_INTERVAL_SECONDS} sn'de bir çalışıyor, her turda değil")
+
+# --- 9) Elde olmayan coine SAT kararı sessizce yutulmamalı -----------------
+_db2.reset_account()
+run_sat = _db2.start_agent_run("XRP/USDT", 1.36)
+_db2.finish_agent_run(run_sat, status="OK", rating="Underweight", action="SELL",
+                      size_factor=0.0, duration_sec=246.0, reports={})
+bot2.apply_pending_decisions("XRP/USDT", 1.36)
+assert _db2.get_agent_run(run_sat)["executed"] == 1
+kayıtlar = [l["message"] for l in _db2.get_logs(20) if "XRP/USDT" in (l["message"] or "")]
+assert any("pozisyonumuz yok" in m for m in kayıtlar), kayıtlar
+assert not _db2.get_open_positions("XRP/USDT"), "olmayan pozisyon kapatılamaz"
+print("✓ pozisyon yokken SAT kararı ne emir açıyor ne de sessizce yutuluyor")
+
 print("\nAJAN ENTEGRASYON TESTLERİ GEÇTİ ✅")

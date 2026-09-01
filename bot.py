@@ -217,7 +217,11 @@ class TradingBot:
                  if self.backend == "alpaca" else "dahili sanal defter")
         db.set_state("execution_backend", self.backend)
 
-        # Yeniden başlatmada yarıda kalmış toplantı kayıtlarını kapat
+        # Yeniden başlatmada yarıda kalmış toplantı kayıtlarını kapat.
+        # Döngü ayrıca periyodik olarak süpürür (sweep_stale_runs): süreç bir
+        # toplantının tam ortasında yeniden başlarsa kayıt burada henüz bayat
+        # olmaz ve tek başına bu çağrı onu asla yakalayamaz.
+        self._last_sweep = 0.0
         stale = db.sweep_stale_agent_runs(config.AGENT_RUN_TIMEOUT_SECONDS)
         if stale:
             log.warning("%d yarıda kalmış kurul kaydı kapatıldı.", stale)
@@ -422,6 +426,12 @@ class TradingBot:
                     for pos in db.get_open_positions(symbol):
                         self.close_trade(pos, price, f"Kurul kararı: {run['rating']}")
 
+            elif action == "SELL" and not has_position:
+                # Elimizde olmayan bir coin için "Sat" demek, "alma" demektir.
+                # Emir çıkmaz; kaydın "uygulandı" görünmesi yanıltmasın diye yaz.
+                db.add_log("AGENT", f"{symbol}: kurul SAT dedi ama pozisyonumuz yok — "
+                                    f"işlem gerekmedi ({run['rating']})", symbol)
+
             db.mark_agent_run_executed(run["id"])
 
     # -------------------------------------------------------------- tarayıcı
@@ -582,8 +592,35 @@ class TradingBot:
         db.record_equity(stats["balance"], stats["equity"])
         self._last_equity_snapshot = now
 
+    # Yarıda kalmış kayıtlar kaç saniyede bir taransın. Ucuz bir UPDATE;
+    # her turda (30 sn) çalıştırmak gereksiz.
+    SWEEP_INTERVAL_SECONDS = 300
+
+    def sweep_stale_runs(self) -> None:
+        """
+        Sonsuza dek 'RUNNING' kalmış toplantı kayıtlarını kapatır.
+
+        Bu süpürme eskiden yalnızca bot açılışında çalışıyordu; süreç bir
+        toplantının TAM ORTASINDA yeniden başlarsa kayıt o an henüz bayat
+        olmadığı için atlanıyor ve bir daha kimse bakmıyordu. Sonucu üç
+        yerde birden görülüyordu:
+          - --status ve panel "toplantı sürüyor" diye yalan söylüyordu,
+          - agent_runs_today() hayalet toplantıyı günlük sınıra sayıyordu,
+          - due() RUNNING'i "başarılı" sayıp o sembol için tam aralığı
+            (saatler) bekliyordu; oysa TIMEOUT 10 dakikada tekrar denenir.
+        """
+        now = time.time()
+        if now - self._last_sweep < self.SWEEP_INTERVAL_SECONDS:
+            return
+        self._last_sweep = now
+        stale = db.sweep_stale_agent_runs(config.AGENT_RUN_TIMEOUT_SECONDS)
+        if stale:
+            log.warning("%d yarıda kalmış kurul kaydı kapatıldı "
+                        "(zaman aşımı sınırını geçmişti).", stale)
+
     def run_once(self) -> None:
         """Aktif sembolleri bir kez işler."""
+        self.sweep_stale_runs()
         for symbol in self.active_symbols():
             try:
                 self.process_symbol(symbol)
@@ -743,6 +780,13 @@ def print_status() -> None:
         print("dahili sanal defter")
         print(f"    ├─ bakiye        : {stats['balance']:,.2f} {config.QUOTE_CURRENCY}")
         print(f"    └─ açık pozisyon : {stats['open_positions']}")
+
+    # --status ayrı bir süreçtir; döngünün periyodik süpürmesi buraya
+    # ulaşmaz. Süpürmeden yazdırırsak takılı kayıtlar "sürüyor" görünür.
+    kapatılan = db.sweep_stale_agent_runs(config.AGENT_RUN_TIMEOUT_SECONDS)
+    if kapatılan:
+        print(f"\n  ℹ {kapatılan} yarıda kalmış toplantı kaydı kapatıldı "
+              f"(zaman aşımı sınırını geçmişti).")
 
     runs = db.get_agent_runs(limit=5)
     running = [r for r in db.get_agent_runs(limit=20) if r["status"] == "RUNNING"]
