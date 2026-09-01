@@ -55,6 +55,82 @@ DECISION_SCHEMA = {
 }
 
 
+def list_models(search: str = "", only_capable: bool = False) -> list[dict]:
+    """
+    OpenRouter'daki modelleri listeler (uç nokta herkese açık, anahtar gerekmez).
+
+    Önemli olan `supported_parameters`: kurul için "tools" ZORUNLU,
+    "response_format" ise güçlü tavsiye. Bunu model kartından okumak yerine
+    doğrudan API'den alıyoruz.
+    """
+    import urllib.request
+
+    with urllib.request.urlopen("https://openrouter.ai/api/v1/models", timeout=20) as resp:
+        models = json.loads(resp.read()).get("data", [])
+
+    needle = (search or "").lower()
+    out = []
+    for m in models:
+        mid = m.get("id", "")
+        name = m.get("name", "")
+        if needle and needle not in mid.lower() and needle not in name.lower():
+            continue
+        params = set(m.get("supported_parameters") or [])
+        pricing = m.get("pricing") or {}
+
+        def _price(key):
+            try:
+                return float(pricing.get(key))
+            except (TypeError, ValueError):
+                return None
+
+        row = {
+            "id": mid,
+            "name": name,
+            "context": m.get("context_length"),
+            "tools": "tools" in params,
+            "structured": "response_format" in params or "structured_outputs" in params,
+            "prompt_price": _price("prompt"),
+            "completion_price": _price("completion"),
+        }
+        row["free"] = (row["prompt_price"] == 0 and row["completion_price"] == 0) \
+            or mid.endswith(":free")
+        if only_capable and not row["tools"]:
+            continue
+        out.append(row)
+    return sorted(out, key=lambda r: (not r["tools"], r["id"]))
+
+
+def print_models(search: str = "", only_capable: bool = False) -> None:
+    line = "─" * 96
+    try:
+        rows = list_models(search, only_capable)
+    except Exception as exc:
+        print(f"\nModel listesi alınamadı: {type(exc).__name__}: {exc}")
+        print("Elle bakmak için: https://openrouter.ai/models\n")
+        return
+
+    print(f"\n{line}")
+    title = f"  OPENROUTER MODELLERİ" + (f"  ·  arama: '{search}'" if search else "")
+    print(f"{title}\n{line}")
+    if not rows:
+        print("  Eşleşen model yok. Arama terimini kısalt (ör. 'ling', 'deepseek').\n")
+        return
+    print(f"  {'MODEL ID':<44} {'BAĞLAM':>8}  {'ARAÇ':^5} {'JSON':^5}  {'$/M girdi':>10} {'$/M çıktı':>10}")
+    print(f"  {'-'*44} {'-'*8}  {'-'*5} {'-'*5}  {'-'*10} {'-'*10}")
+    for r in rows[:40]:
+        ctx = f"{r['context']:,}" if r["context"] else "-"
+        pin = f"{r['prompt_price'] * 1e6:.2f}" if r["prompt_price"] is not None else "-"
+        pout = f"{r['completion_price'] * 1e6:.2f}" if r["completion_price"] is not None else "-"
+        print(f"  {r['id'][:44]:<44} {ctx:>8}  {'✅' if r['tools'] else '❌':^4} "
+              f"{'✅' if r['structured'] else '❌':^4}  {pin:>10} {pout:>10}")
+    if len(rows) > 40:
+        print(f"  ... ve {len(rows) - 40} model daha (aramayı daralt)")
+    print(f"\n  ARAÇ sütunu ❌ olan modeller kurul için KULLANILAMAZ.")
+    print(f"  Seçtiğin modeli sınamak için:  python bot.py --test-llm --model <ID>")
+    print(f"{line}\n")
+
+
 def _client(model: Optional[str] = None):
     from openai import OpenAI
     return OpenAI(api_key=config.LLM_API_KEY,

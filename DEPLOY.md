@@ -388,6 +388,7 @@ ufw status verbose
 cd /opt/yatirimasistan-
 
 docker compose exec bot python bot.py --status    # tek bakışta her şey
+docker compose exec bot python bot.py --list-models deepseek  # model ID'lerini bul
 docker compose exec bot python bot.py --test-llm  # model kurul için uygun mu
 docker compose ps                  # durum
 docker compose logs -f bot         # canlı log

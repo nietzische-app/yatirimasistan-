@@ -99,4 +99,43 @@ assert lc.print_report("test/model") is False
 config.LLM_API_KEY = _k
 print("✓ anahtar yokken hatasız uyarı veriyor")
 
+# --- 6) Model listeleme: araç desteği doğru okunuyor mu? --------------------
+import io
+import urllib.request
+
+_FAKE = {"data": [
+    {"id": "a/tools-model", "name": "Tools", "context_length": 64000,
+     "pricing": {"prompt": "0.00000014", "completion": "0.00000028"},
+     "supported_parameters": ["tools", "response_format"]},
+    {"id": "b/no-tools:free", "name": "Serbest", "context_length": 128000,
+     "pricing": {"prompt": "0", "completion": "0"},
+     "supported_parameters": ["temperature"]},
+]}
+
+
+class _FakeResp:
+    def __enter__(self): return io.BytesIO(json.dumps(_FAKE).encode())
+    def __exit__(self, *a): pass
+
+
+urllib.request.urlopen = lambda *a, **k: _FakeResp()
+
+rows = lc.list_models()
+by_id = {r["id"]: r for r in rows}
+assert by_id["a/tools-model"]["tools"] and by_id["a/tools-model"]["structured"]
+assert not by_id["b/no-tools:free"]["tools"]
+assert by_id["b/no-tools:free"]["free"], ":free modeli ücretsiz olarak işaretlenmeli"
+assert abs(by_id["a/tools-model"]["prompt_price"] * 1e6 - 0.14) < 1e-6
+assert rows[0]["tools"], "araç çağırabilenler listenin başında olmalı"
+assert len(lc.list_models(search="no-tools")) == 1, "arama filtresi çalışmalı"
+assert len(lc.list_models(only_capable=True)) == 1, "only_capable araçsızları elemeli"
+print("✓ model listesi: araç/JSON desteği, fiyat ve ücretsiz işareti doğru okunuyor")
+
+# Ağ hatası çökmeye yol açmamalı
+def _boom(*a, **k):
+    raise OSError("ağ yok")
+urllib.request.urlopen = _boom
+lc.print_models("x")      # hata mesajı basar, exception fırlatmaz
+print("✓ model listesi alınamazsa hatasız uyarı veriyor")
+
 print("\nLLM UYGUNLUK TESTLERİ GEÇTİ ✅")

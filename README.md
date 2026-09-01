@@ -190,9 +190,14 @@ kotan değil, OpenRouter'daki modelin ücretsiz havuzunun tıkanmasıdır. Kalı
 ### Model seçerken: önce ölç
 
 ```bash
-python bot.py --test-llm                       # .env'deki modeli sına
-python bot.py --test-llm --model başka/model    # aday modeli sına
+python bot.py --list-models ling --capable-only  # doğru model ID'sini bul
+python bot.py --test-llm                         # .env'deki modeli sına
+python bot.py --test-llm --model <ID>            # aday modeli sına
 ```
+
+`--list-models` OpenRouter'ın model listesini çeker ve her modelin **araç
+çağırma** ile **yapılandırılmış çıktı** desteğini, bağlam uzunluğunu ve
+milyon token fiyatını gösterir. Model ID'lerini tahmin etme — buradan kopyala.
 
 Kurul modelden üç şey ister ve biri eksikse çalışmaz:
 

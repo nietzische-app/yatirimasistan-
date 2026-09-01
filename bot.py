@@ -697,6 +697,10 @@ def main() -> None:
                         help="Kurulu hemen topla (sıklık sınırını atlar) ve çık")
     parser.add_argument("--status", action="store_true",
                         help="Sistemin tam durumunu yazdır ve çık")
+    parser.add_argument("--list-models", metavar="ARAMA", nargs="?", const="",
+                        help="OpenRouter modellerini listele (araç çağırma desteğiyle)")
+    parser.add_argument("--capable-only", action="store_true",
+                        help="--list-models ile: yalnızca araç çağırabilen modeller")
     parser.add_argument("--test-llm", action="store_true",
                         help="Seçili modelin kurul için uygun olup olmadığını ölç")
     parser.add_argument("--model", metavar="AD",
@@ -717,6 +721,11 @@ def main() -> None:
 
     if args.status:
         print_status()
+        return
+
+    if args.list_models is not None:
+        import llm_check
+        llm_check.print_models(args.list_models, args.capable_only)
         return
 
     if args.test_llm:
