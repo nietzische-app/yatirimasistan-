@@ -467,7 +467,7 @@ class AgentCouncil:
             return False
         if db.agent_runs_today() >= config.AGENT_MAX_RUNS_PER_DAY:
             return False
-        runs = db.get_agent_runs(limit=1, symbol=symbol)
+        runs = db.get_agent_runs(limit=8, symbol=symbol)
         if not runs:
             return True
         last = runs[0]
@@ -481,7 +481,22 @@ class AgentCouncil:
         # tekrar deneme kaldığı yerden devam eder.
         transient_failure = (last["status"] in ("ERROR", "TIMEOUT")
                              and not classify_error(last.get("error") or ""))
-        wait = config.AGENT_RETRY_MINUTES if transient_failure else config.AGENT_INTERVAL_MINUTES
+        if not transient_failure:
+            wait = config.AGENT_INTERVAL_MINUTES
+        else:
+            # ÜST ÜSTE hata varsa bekleme katlanır. Sağlayıcı doymuşsa (429)
+            # 10 dakikada bir tekrar denemek yalnızca günlük toplantı kotasını
+            # yakar: canlıda 5 ardışık 429, 60'lık günlük sınırın 5'ini yedi ve
+            # hiçbiri sonuç vermedi. 10 -> 20 -> 40 -> 80 dk, tavan normal
+            # aralık; bir kez başarılı olunca sayaç kendiliğinden sıfırlanır.
+            ardışık = 0
+            for r in runs:
+                if r["status"] in ("ERROR", "TIMEOUT") and not classify_error(r.get("error") or ""):
+                    ardışık += 1
+                else:
+                    break
+            wait = min(config.AGENT_RETRY_MINUTES * (2 ** (ardışık - 1)),
+                       config.AGENT_INTERVAL_MINUTES)
         return datetime.now(timezone.utc) - started >= timedelta(minutes=wait)
 
     # ------------------------------------------------------------- çalıştır

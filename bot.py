@@ -406,13 +406,22 @@ class TradingBot:
             target = price * (1 + config.TAKE_PROFIT_PCT)
 
             if action == "BUY" and not has_position:
-                if self.backend == "alpaca":
+                # Pozisyon limiti HER İKİ arka uçta da geçerli. Eskiden bu
+                # kontrol yalnızca dahili defterin dalındaydı (elif); Alpaca
+                # kullanılırken config.MAX_OPEN_POSITIONS sessizce yok
+                # sayılıyor ve kurul her adayda yeni pozisyon açabiliyordu.
+                açık = self.open_position_count()
+                if açık is None:
+                    db.add_log("AGENT", f"{symbol}: AL kararı atlandı — açık pozisyon "
+                                        f"sayısı okunamadı (körlemesine emir yok)", symbol)
+                elif açık >= config.MAX_OPEN_POSITIONS:
+                    db.add_log("AGENT", f"{symbol}: AL kararı atlandı (pozisyon limiti "
+                                        f"{açık}/{config.MAX_OPEN_POSITIONS})", symbol)
+                elif self.backend == "alpaca":
                     self.broker.buy(symbol,
                                     self.broker.position_notional(size),
                                     take_profit=target, stop_loss=stop,
                                     agent_run_id=run["id"])
-                elif len(db.get_open_positions()) >= config.MAX_OPEN_POSITIONS:
-                    db.add_log("AGENT", f"{symbol}: AL kararı atlandı (pozisyon limiti)", symbol)
                 else:
                     self.open_trade(symbol, price, size_factor=size,
                                     stop_price=run["proposed_stop"],
@@ -474,6 +483,19 @@ class TradingBot:
             if not self._candidates:
                 self._candidates = list(config.SYMBOLS)
         return self._candidates
+
+    def open_position_count(self) -> Optional[int]:
+        """
+        Kaç açık pozisyonumuz var? Kullanılan yürütme arkasından okunur.
+        Okunamazsa None döner — çağıran taraf körlemesine emir GÖNDERMEZ.
+        """
+        if self.backend == "alpaca" and self.broker is not None:
+            try:
+                return len(self.broker.positions())
+            except Exception as exc:
+                log.warning("Alpaca pozisyon sayısı okunamadı: %s", exc)
+                return None
+        return len(db.get_open_positions())
 
     def held_symbols(self) -> set[str]:
         """
@@ -775,17 +797,22 @@ def print_status() -> None:
                       f"(pay %{config.ALPACA_POSITION_PCT * 100:g}, tavan "
                       f"{config.ALPACA_MAX_NOTIONAL:,.0f})")
                 positions = ex.positions()
-                print(f"    └─ pozisyon      : {len(positions)}")
+                dolu = len(positions) >= config.MAX_OPEN_POSITIONS
+                print(f"    └─ pozisyon      : {len(positions)} / {config.MAX_OPEN_POSITIONS}"
+                      + ("   ⚠ LİMİT DOLU — yeni AL kararları uygulanmıyor" if dolu else ""))
                 for p in positions:
                     print(f"        {p['symbol']}: {p['qty']} @ {p['avg_entry_price']:,.2f} "
                           f"-> {p['unrealized_pl']:+,.2f} ({p['unrealized_plpc']:+.2f}%)")
+                if dolu:
+                    print(f"        Limiti yükseltmek için .env'e: "
+                          f"MAX_OPEN_POSITIONS={len(positions) + 2}")
             except Exception as exc:
                 print(f"    └─ hesap okunamadı: {exc}")
     else:
         stats = db.get_stats()
         print("dahili sanal defter")
         print(f"    ├─ bakiye        : {stats['balance']:,.2f} {config.QUOTE_CURRENCY}")
-        print(f"    └─ açık pozisyon : {stats['open_positions']}")
+        print(f"    └─ açık pozisyon : {stats['open_positions']} / {config.MAX_OPEN_POSITIONS}")
 
     # --status ayrı bir süreçtir; döngünün periyodik süpürmesi buraya
     # ulaşmaz. Süpürmeden yazdırırsak takılı kayıtlar "sürüyor" görünür.

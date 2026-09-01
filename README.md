@@ -273,6 +273,32 @@ kadans = günde ~1000 çağrı.
 | `AGENT_ANALYSTS_CRYPTO` | `market,news` (zaten 2 analist) | `market` → tek analist |
 | `LLM_MAX_TOKENS` | sınırsız | 2000 → uzun cevaplar kesilir |
 
+### Pozisyon limiti her iki arka uçta geçerli
+
+`MAX_OPEN_POSITIONS` (varsayılan 2) hem dahili sanal defterde hem **Alpaca'da**
+uygulanır. Limit doluyken kurul "Al" dese bile emir gönderilmez; sebebi loga ve
+panele yazılır. Açık pozisyon sayısı okunamazsa (broker hatası) emir yine
+gönderilmez — körlemesine pozisyon açmaktansa bir turu kaçırmak yeğdir.
+
+`--status` çıktısı `pozisyon : 5 / 2` biçiminde gösterir ve limit doluysa
+uyarır. Alpaca'da $100.000'lık paper hesapla çalışıyorsan varsayılan 2 muhtemelen
+düşüktür; `.env` içinde yükselt:
+
+```bash
+MAX_OPEN_POSITIONS=6
+```
+
+### Ardışık hatada bekleme katlanır
+
+Sağlayıcı doymuşsa (429) sabit aralıkla tekrar denemek yalnızca günlük toplantı
+kotasını yakar — canlıda 5 ardışık 429 görüldü, hepsi 10 dakikada bir tekrar
+denendi, hiçbiri sonuç vermedi ve 60'lık günlük sınırdan 5 slot yedi.
+
+Bekleme artık üst üste gelen geçici hata sayısıyla katlanıyor:
+**10 → 20 → 40 → 80 dakika**, tavanı `AGENT_INTERVAL_MINUTES`. Bir toplantı
+başarıyla bitince sayaç kendiliğinden sıfırlanır. Kalıcı hatalar (402, kota
+bitmesi) bu mantığa girmez — onlar kurulu tamamen durdurur.
+
 ### Aynı anda tek toplantı
 
 Kurul sembolleri **sırayla** ele alır, paralel değil. Sebebi teknik:

@@ -338,4 +338,112 @@ assert _kaynak.index("update_market") < _kaynak.index("maybe_convene"), \
     "piyasa satırı kurul toplanmadan ÖNCE yazılmalı"
 print("✓ piyasa görüntüsü kurul toplanmadan önce yazılıyor")
 
+# --- 11) Ardışık geçici hatada bekleme katlanmalı --------------------------
+# Canlıda 5 ardışık 429 görüldü: her biri 10 dakikada tekrar deneniyor, hiçbiri
+# sonuç vermiyor ama 60'lık GÜNLÜK toplantı kotasından yiyordu.
+_db3 = _db2
+_db3.init_db()
+_sym = "BACKOFF/USDT"
+
+
+def senaryo(ardışık_hata: int, son_koşu_dk_önce: float, önce_başarı: bool = False):
+    """Sembolün geçmişini sıfırlayıp istenen durumu kurar (kayıtlar id sırasına
+    göre okunuyor, o yüzden eskiden yeniye eklenir)."""
+    with _db3.get_connection() as c:
+        c.execute("DELETE FROM agent_runs WHERE symbol = ?", (_sym,))
+
+    def yaz(durum, dk, **kw):
+        rid = _db3.start_agent_run(_sym, 1.0)
+        _db3.finish_agent_run(rid, status=durum, duration_sec=5.0, **kw)
+        eski = (_dt.now(_tz.utc) - _td(minutes=dk)).strftime("%Y-%m-%d %H:%M:%S")
+        with _db3.get_connection() as c:
+            c.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", (eski, rid))
+
+    if önce_başarı:
+        yaz("OK", son_koşu_dk_önce + ardışık_hata + 5, rating="Hold", action="HOLD",
+            size_factor=0.0, reports={})
+    for i in range(ardışık_hata, 0, -1):
+        yaz("ERROR", son_koşu_dk_önce + (i - 1), error="RateLimitError: 429 Too Many Requests")
+
+
+# 1 hata -> 10 dk bekle
+senaryo(1, 5);   assert not ae.AgentCouncil.due(_sym), "1 hata: 5 dk yetmemeli"
+senaryo(1, 12);  assert ae.AgentCouncil.due(_sym), "1 hata: 12 dk yetmeli (10 dk)"
+# 2 ardışık -> 20 dk
+senaryo(2, 12);  assert not ae.AgentCouncil.due(_sym), "2 ardışık: 12 dk yetmemeli"
+senaryo(2, 25);  assert ae.AgentCouncil.due(_sym), "2 ardışık: 25 dk yetmeli (20 dk)"
+# 3 ardışık -> 40 dk
+senaryo(3, 25);  assert not ae.AgentCouncil.due(_sym), "3 ardışık: 25 dk yetmemeli"
+senaryo(3, 45);  assert ae.AgentCouncil.due(_sym), "3 ardışık: 45 dk yetmeli (40 dk)"
+# Çok sayıda ardışık -> bekleme normal aralıkta tavanlanır, sonsuza gitmez
+_tavan = config.AGENT_INTERVAL_MINUTES
+senaryo(8, _tavan - 5)
+assert not ae.AgentCouncil.due(_sym), f"8 ardışık: {_tavan - 5} dk yetmemeli"
+senaryo(8, _tavan + 5)
+assert ae.AgentCouncil.due(_sym), "bekleme normal aralığı AŞMAMALI (tavan)"
+print(f"✓ ardışık geçici hatada bekleme katlanıyor "
+      f"(10-20-40-80… tavan {config.AGENT_INTERVAL_MINUTES} dk)")
+
+# Başarılı bir koşu sayacı sıfırlamalı: sonrasındaki ilk hata yine 10 dk
+senaryo(1, 12, önce_başarı=True)
+assert ae.AgentCouncil.due(_sym), "başarılı koşudan sonra sayaç sıfırlanmalı"
+print("✓ başarılı toplantı geri çekilme sayacını sıfırlıyor")
+
+# Kalıcı hata (402) geri çekilmeye değil, kurulu durdurmaya tabidir
+with _db3.get_connection() as c:
+    c.execute("DELETE FROM agent_runs WHERE symbol = ?", (_sym,))
+_kalıcı = _db3.start_agent_run(_sym, 1.0)
+_db3.finish_agent_run(_kalıcı, status="ERROR", duration_sec=2.0,
+                      error="402 - requires more credits")
+with _db3.get_connection() as c:
+    c.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?",
+              ((_dt.now(_tz.utc) - _td(minutes=12)).strftime("%Y-%m-%d %H:%M:%S"), _kalıcı))
+assert not ae.AgentCouncil.due(_sym), "kalıcı hata geçici sayılıp kısa aralıkta denenmemeli"
+print("✓ kalıcı hata (402) geri çekilme mantığına karışmıyor")
+
+# --- 12) Pozisyon limiti Alpaca'da da geçerli olmalı ------------------------
+# Hata: kontrol yalnızca dahili defterin elif dalındaydı; Alpaca kullanılırken
+# MAX_OPEN_POSITIONS sessizce yok sayılıyordu (canlıda limit 2 iken 5 pozisyon).
+class SahteBroker:
+    def __init__(self, adet): self.adet, self.alımlar = adet, []
+    def positions(self): return [{"symbol": f"X{i}USD"} for i in range(self.adet)]
+    def position_for(self, symbol): return None
+    def position_notional(self, size): return 5000.0 * size
+    def buy(self, symbol, notional, **kw): self.alımlar.append(symbol)
+
+_db3.reset_account()
+bot3 = TradingBot()
+bot3.backend = "alpaca"
+_limit = config.MAX_OPEN_POSITIONS
+config.MAX_OPEN_POSITIONS = 2
+
+bot3.broker = SahteBroker(adet=5)          # limitin üstünde
+rid = _db3.start_agent_run("BCH/USDT", 247.0)
+_db3.finish_agent_run(rid, status="OK", rating="Buy", action="BUY",
+                      size_factor=1.0, duration_sec=100.0, reports={})
+bot3.apply_pending_decisions("BCH/USDT", 247.0)
+assert bot3.broker.alımlar == [], "limit aşılmışken Alpaca'da emir açılmamalı"
+assert any("pozisyon limiti" in (l["message"] or "") for l in _db3.get_logs(10))
+print("✓ pozisyon limiti Alpaca'da da uygulanıyor")
+
+bot3.broker = SahteBroker(adet=1)          # limitin altında
+rid2 = _db3.start_agent_run("LTC/USDT", 48.0)
+_db3.finish_agent_run(rid2, status="OK", rating="Buy", action="BUY",
+                      size_factor=1.0, duration_sec=100.0, reports={})
+bot3.apply_pending_decisions("LTC/USDT", 48.0)
+assert bot3.broker.alımlar == ["LTC/USDT"], bot3.broker.alımlar
+print("✓ limit altındayken emir normal açılıyor")
+
+class KörBroker(SahteBroker):
+    def positions(self): raise RuntimeError("Alpaca 500")
+
+bot3.broker = KörBroker(adet=0)
+rid3 = _db3.start_agent_run("AVAX/USDT", 7.2)
+_db3.finish_agent_run(rid3, status="OK", rating="Buy", action="BUY",
+                      size_factor=1.0, duration_sec=100.0, reports={})
+bot3.apply_pending_decisions("AVAX/USDT", 7.2)
+assert bot3.broker.alımlar == [], "pozisyon sayısı okunamıyorsa körlemesine emir gönderilmemeli"
+print("✓ pozisyon sayısı okunamazsa emir gönderilmiyor")
+config.MAX_OPEN_POSITIONS = _limit
+
 print("\nAJAN ENTEGRASYON TESTLERİ GEÇTİ ✅")
