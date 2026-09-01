@@ -697,6 +697,10 @@ def main() -> None:
                         help="Kurulu hemen topla (sıklık sınırını atlar) ve çık")
     parser.add_argument("--status", action="store_true",
                         help="Sistemin tam durumunu yazdır ve çık")
+    parser.add_argument("--test-llm", action="store_true",
+                        help="Seçili modelin kurul için uygun olup olmadığını ölç")
+    parser.add_argument("--model", metavar="AD",
+                        help="--test-llm ile: başka bir modeli dene")
     parser.add_argument("--resume-council", action="store_true",
                         help="Kalıcı hata sonrası durdurulan kurulu yeniden etkinleştir")
     args = parser.parse_args()
@@ -713,6 +717,11 @@ def main() -> None:
 
     if args.status:
         print_status()
+        return
+
+    if args.test_llm:
+        import llm_check
+        llm_check.print_report(args.model)
         return
 
     if args.resume_council:

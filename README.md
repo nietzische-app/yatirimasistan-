@@ -20,6 +20,7 @@ kontrol paneli.
 ├── bot.py                    # Ticaret motoru: veri çekme, indikatör, al/sat kararı
 ├── agents_engine.py          # TradingAgents kurulunu çalıştırır, kararı ve raporları yazar
 ├── alpaca_execution.py       # Kararları Alpaca Paper Trading'e emir olarak gönderir
+├── llm_check.py              # Seçilen modelin kurul için uygunluğunu ölçer
 ├── trading_agents/           # TradingAgents reposu (git submodule, Apache-2.0)
 ├── backtest.py               # RSI/EMA taban çizgisini geçmiş veride sınama
 ├── database.py               # SQLite katmanı: bakiye, pozisyon, işlem, equity, log
@@ -43,6 +44,7 @@ kontrol paneli.
     ├── test_execution.py     # Pozisyon/PnL/koruma testleri (internet gerekmez)
     ├── test_agents.py        # Kurul entegrasyonu (LLM anahtarı gerekmez, sahte kurul)
     ├── test_alpaca.py        # Alpaca emir yürütme (API anahtarı gerekmez, sahte istemci)
+    ├── test_llm_check.py     # Model uygunluk testinin kendisi
     ├── test_backtest.py      # Backtest motoru testleri
     └── test_dashboard.py     # Paneli gerçekten çalıştıran render testi
 ```
@@ -184,6 +186,25 @@ Sık görülen bir 429 çeşidi: `rate-limited upstream ... shared_pool`. Bu sen
 kotan değil, OpenRouter'daki modelin ücretsiz havuzunun tıkanmasıdır. Kalıcı
 çözüm: daha az yoğun bir modele geçmek, kendi sağlayıcı anahtarını eklemek
 (BYOK) veya OpenRouter'ın provider routing özelliğini kullanmak.
+
+### Model seçerken: önce ölç
+
+```bash
+python bot.py --test-llm                       # .env'deki modeli sına
+python bot.py --test-llm --model başka/model    # aday modeli sına
+```
+
+Kurul modelden üç şey ister ve biri eksikse çalışmaz:
+
+| Yetenek | Neden gerekli | Eksikse |
+|---|---|---|
+| **Araç çağırma** | Analistler veriyi tool call ile çeker | Kurul **çalışmaz** |
+| **Yapılandırılmış çıktı** | Müdür/Trader JSON şema ile cevap verir | Serbest metne düşer, ara sıra `REVIEW` |
+| Uzun bağlam | Raporlar + tartışma birikir | Erken kesilir |
+
+Ücretsiz (`:free`) modellerde ek olarak günlük istek sınırı ve ortak havuz
+tıkanıklığı (429) vardır. Bir toplantı ~20-25 çağrı; 2 sembol × saatlik
+kadans = günde ~1000 çağrı.
 
 **Maliyeti düşürme kolları** (etkisi büyükten küçüğe):
 

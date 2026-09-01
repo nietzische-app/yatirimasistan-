@@ -387,7 +387,8 @@ ufw status verbose
 ```bash
 cd /opt/yatirimasistan-
 
-docker compose exec bot python bot.py --status   # tek bakışta her şey
+docker compose exec bot python bot.py --status    # tek bakışta her şey
+docker compose exec bot python bot.py --test-llm  # model kurul için uygun mu
 docker compose ps                  # durum
 docker compose logs -f bot         # canlı log
 docker compose restart bot         # motoru yeniden başlat
