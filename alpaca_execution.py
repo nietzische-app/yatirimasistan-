@@ -247,6 +247,45 @@ class AlpacaExecutor:
             "filled_avg_price": _f("filled_avg_price"),
         }
 
+    # ------------------------------------------------- emir durumu takibi
+    FINAL_STATUSES = {"filled", "canceled", "cancelled", "expired", "rejected", "done_for_day"}
+
+    def sync_orders(self, limit: int = 20) -> int:
+        """
+        Gönderilen emirlerin son durumunu Alpaca'dan okuyup veritabanına yazar.
+
+        Emir gönderildiğinde Alpaca "accepted/pending_new" döner; doldurma
+        saniyeler sonra olur. Bu senkron olmadan veritabanı sonsuza dek
+        "pending_new" gösterir ve gerçekleşen fiyat hiç kaydedilmez.
+        Güncellenen emir sayısını döner.
+        """
+        updated = 0
+        for row in db.get_broker_orders(limit=limit):
+            if (row.get("status") or "").lower() in self.FINAL_STATUSES:
+                continue
+            oid = row.get("broker_order_id")
+            if not oid:
+                continue
+            try:
+                order = self.client().get_order_by_id(oid)
+            except Exception as exc:
+                log.debug("Emir %s okunamadı: %s", oid, exc)
+                continue
+            info = self._order_info(order)
+            if info["status"] != row.get("status") or info["filled_avg_price"]:
+                db.update_broker_order(row["id"], status=info["status"],
+                                       filled_qty=info["filled_qty"],
+                                       filled_avg_price=info["filled_avg_price"])
+                updated += 1
+                if info["status"].lower() == "filled":
+                    db.add_log("BROKER",
+                               f"{row['symbol']}: emir doldu — {info['filled_qty']} @ "
+                               f"{info['filled_avg_price']:,.2f}", row["symbol"])
+                elif info["status"].lower() in ("rejected", "canceled", "cancelled"):
+                    db.add_log("ERROR",
+                               f"{row['symbol']}: emir {info['status']}", row["symbol"])
+        return updated
+
     # --------------------------------------------------- koruma (kripto)
     def check_protective_exit(self, symbol: str, price: float) -> Optional[str]:
         """

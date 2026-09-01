@@ -209,6 +209,11 @@ class TradingBot:
         log.info("Emir yürütme: %s", "Alpaca " + ("PAPER" if config.ALPACA_PAPER else "CANLI")
                  if self.backend == "alpaca" else "dahili sanal defter")
         db.set_state("execution_backend", self.backend)
+
+        # Yeniden başlatmada yarıda kalmış toplantı kayıtlarını kapat
+        stale = db.sweep_stale_agent_runs(config.AGENT_RUN_TIMEOUT_SECONDS)
+        if stale:
+            log.warning("%d yarıda kalmış kurul kaydı kapatıldı.", stale)
         mode = "DEMO (sanal para)" if config.DEMO_MODE else "GERÇEK EMİR"
         if config.OFFLINE_SIMULATION:
             mode += " · OFFLINE SİMÜLASYON"
@@ -447,6 +452,13 @@ class TradingBot:
                 reason = self.check_exit(position, price)
                 if reason:
                     self.close_trade(position, price, reason)
+
+        # 1b) Alpaca emirlerinin son durumunu al (pending -> filled)
+        if self.backend == "alpaca":
+            try:
+                self.broker.sync_orders()
+            except Exception as exc:
+                log.debug("Emir senkronu başarısız: %s", exc)
 
         # 2) Kurulun tamamlanmış kararlarını uygula
         self.apply_pending_decisions(symbol, price)

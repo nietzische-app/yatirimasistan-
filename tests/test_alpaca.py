@@ -182,6 +182,59 @@ db.record_broker_order("ETH/USDT", "sell", broker_symbol="ETH/USD", status="fill
 assert ex.check_protective_exit("ETH/USDT", 3301.0) is None, "satıştan sonra koruma aranmamalı"
 print("✓ kripto kâr al/stop koruması bot tarafında çalışıyor")
 
+# --- 10b) Emir durumu senkronu: pending_new -> filled -----------------------
+db.init_db()
+with db.get_connection() as _c:
+    _c.execute("DELETE FROM broker_orders")
+
+pending = db.record_broker_order("BTC/USDT", "buy", broker_symbol="BTC/USD",
+                                 notional=5000.0, status="pending_new",
+                                 broker_order_id="ord-p1")
+done = db.record_broker_order("ETH/USDT", "buy", broker_symbol="ETH/USD",
+                              notional=5000.0, status="filled",
+                              broker_order_id="ord-done", filled_avg_price=2466.0)
+
+class SyncClient(FakeClient):
+    def __init__(self):
+        super().__init__()
+        self.asked = []
+    def get_order_by_id(self, oid):
+        self.asked.append(oid)
+        return FakeOrder(oid=oid, status="filled", qty=0.0637, price=78552.32)
+
+sc = SyncClient()
+ex_sync = executor(sc)
+n = ex_sync.sync_orders()
+assert n == 1, f"yalnızca bekleyen emir güncellenmeliydi, {n} güncellendi"
+assert sc.asked == ["ord-p1"], f"tamamlanmış emir tekrar sorulmamalı: {sc.asked}"
+row = [o for o in db.get_broker_orders(10) if o["broker_order_id"] == "ord-p1"][0]
+assert row["status"] == "filled" and abs(row["filled_avg_price"] - 78552.32) < 1e-6
+assert abs(row["filled_qty"] - 0.0637) < 1e-9
+print(f"✓ emir senkronu: pending_new -> filled @ {row['filled_avg_price']:,.2f}")
+
+class BrokenClient(FakeClient):
+    def get_order_by_id(self, oid): raise RuntimeError("network")
+db.update_broker_order(pending, status="pending_new")
+assert executor(BrokenClient()).sync_orders() == 0, "hata sessizce yutulmalı"
+print("✓ emir okunamazsa senkron çökmüyor")
+
+# --- 10c) Yarıda kalmış kurul kayıtları başlangıçta kapanıyor ---------------
+import time as _t
+with db.get_connection() as _c:
+    _c.execute("DELETE FROM agent_runs")
+old_run = db.start_agent_run("BTC/USDT", 100.0)
+with db.get_connection() as _c:      # 2 saat önce başlamış gibi
+    _c.execute("UPDATE agent_runs SET started_at = datetime('now','-2 hours') WHERE id = ?",
+               (old_run,))
+fresh_run = db.start_agent_run("ETH/USDT", 100.0)
+
+closed = db.sweep_stale_agent_runs(max_age_seconds=3600)
+assert closed == 1, f"yalnızca eski kayıt kapanmalıydı, {closed} kapandı"
+assert db.get_agent_run(old_run)["status"] == "TIMEOUT"
+assert "yarıda kaldı" in (db.get_agent_run(old_run)["error"] or "")
+assert db.get_agent_run(fresh_run)["status"] == "RUNNING", "süren toplantıya dokunulmamalı"
+print("✓ yeniden başlatmada asılı kalan kurul kayıtları kapanıyor")
+
 # --- 11) Bot entegrasyonu: kurul kararı Alpaca'ya gidiyor --------------------
 config.EXECUTION_BACKEND = "alpaca"
 from bot import TradingBot

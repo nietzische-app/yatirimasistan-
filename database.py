@@ -21,7 +21,7 @@ import os
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 import config
@@ -484,6 +484,24 @@ def mark_agent_run_executed(run_id: int) -> None:
     ensure_db()
     with get_connection() as conn:
         conn.execute("UPDATE agent_runs SET executed = 1 WHERE id = ?", (run_id,))
+
+
+def sweep_stale_agent_runs(max_age_seconds: int) -> int:
+    """
+    Süreç yeniden başlatıldığında yarıda kalan toplantı kayıtları sonsuza dek
+    RUNNING kalıyordu: panelde "sürüyor" görünüyor ve günlük sayaca ekleniyordu.
+    Başlangıçta bu kayıtları kapatır; kaç tanesini kapattığını döner.
+    """
+    ensure_db()
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(seconds=int(max_age_seconds))).strftime("%Y-%m-%d %H:%M:%S")
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE agent_runs SET status = 'TIMEOUT', finished_at = ?,"
+            " error = 'yarıda kaldı (süreç yeniden başlatıldı veya zaman aşımı)'"
+            " WHERE status = 'RUNNING' AND started_at < ?",
+            (utcnow(), cutoff))
+        return cur.rowcount
 
 
 def get_agent_runs(limit: int = 50, symbol: Optional[str] = None,
