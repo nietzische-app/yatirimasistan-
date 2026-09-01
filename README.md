@@ -192,7 +192,7 @@ kotan değil, OpenRouter'daki modelin ücretsiz havuzunun tıkanmasıdır. Kalı
 ```bash
 python bot.py --list-models ling --capable-only  # doğru model ID'sini bul
 python bot.py --test-llm                         # .env'deki modeli sına
-python bot.py --test-llm --model <ID>            # aday modeli sına
+python bot.py --test-llm --model inclusionai/ling-3.0-flash   # aday modeli sına
 ```
 
 `--list-models` OpenRouter'ın model listesini çeker ve her modelin **araç

@@ -127,7 +127,9 @@ def print_models(search: str = "", only_capable: bool = False) -> None:
     if len(rows) > 40:
         print(f"  ... ve {len(rows) - 40} model daha (aramayı daralt)")
     print(f"\n  ARAÇ sütunu ❌ olan modeller kurul için KULLANILAMAZ.")
-    print(f"  Seçtiğin modeli sınamak için:  python bot.py --test-llm --model <ID>")
+    print("  Seçtiğin modeli sınamak için (ID'yi olduğu gibi yapıştır, "
+          "köşeli parantez YOK):")
+    print("    python bot.py --test-llm --model inclusionai/ling-3.0-flash")
     print(f"{line}\n")
 
 
