@@ -48,10 +48,16 @@ def score_symbol(df: pd.DataFrame, daily_ema: Optional[float] = None) -> dict:
     # 2) Aşırı alım ilgisi: açık pozisyon varsa çıkış konuşulmalı
     overbought = max(0.0, (rsi - 50.0) / 50.0)
 
-    # 3) Hacim patlaması: son mumun hacmi ortalamanın kaç katı
-    vol = df["volume"].astype(float)
+    # 3) Hacim patlaması: son KAPANMIŞ mumun hacmi ortalamanın kaç katı.
+    #
+    # Son satır (iloc[-1]) henüz oluşmakta olan mumdur: hacmi o ana kadar
+    # birikmiş kısımdır, tam mumların ortalamasıyla kıyaslanamaz. Onu okumak
+    # oranı sistematik olarak 1.0'ın altına bastırıyor ve bileşen hiç
+    # ateşlenmiyordu (canlı taramada 12 coinin 12'si de 0.3x altındaydı).
+    # RSI zaten iloc[-2] okuyor; hacim de aynı mumu okumalı.
+    vol = df["volume"].astype(float).iloc[:-1]
     vol_mean = float(vol.tail(96).mean()) or 1.0
-    vol_ratio = float(vol.iloc[-1]) / vol_mean
+    vol_ratio = float(vol.iloc[-1]) / vol_mean if len(vol) else 0.0
     volume_surge = min(1.0, max(0.0, (vol_ratio - 1.0) / 3.0))
 
     # 4) Oynaklık: son 24 saatteki mutlak değişim

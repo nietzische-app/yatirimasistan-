@@ -51,12 +51,27 @@ print(f"✓ aşırı satım önceliklendiriliyor (RSI {s_düşen['rsi']:.0f} pua
       f" > yatay {s_yatay['score']:.3f})")
 
 # --- 2) Hacim patlaması puanı yükseltir -------------------------------------
-hacimler = [100.0] * 199 + [500.0]
+# Patlama son KAPANMIŞ mumda (-2). Son satır (-1) henüz oluşmakta olan mumdur;
+# hacmi eksiktir ve kıyasa girmemelidir.
+hacimler = [100.0] * 198 + [500.0, 20.0]
 s_hacim = sc.score_symbol(frame(yatay, hacimler), daily_ema=95.0)
 assert s_hacim["volume_ratio"] > 3, s_hacim["volume_ratio"]
 assert s_hacim["score"] > s_yatay["score"], "hacim patlaması puanı artırmalı"
 print(f"✓ hacim patlaması yakalanıyor ({s_hacim['volume_ratio']:.1f}x -> puan +"
       f"{s_hacim['score'] - s_yatay['score']:.3f})")
+
+# Regresyon: oluşmakta olan mumun yarım hacmi oranı bastırmamalı. Eskiden
+# iloc[-1] okunduğu için canlı taramada 12 coinin 12'si de 1.0x altındaydı ve
+# bileşen hiç ateşlenemiyordu.
+yarım = [100.0] * 199 + [15.0]          # son mum daha yeni açılmış
+s_yarım = sc.score_symbol(frame(yatay, yarım), daily_ema=95.0)
+assert 0.9 < s_yarım["volume_ratio"] < 1.1, \
+    f"oluşan mum oranı bastırıyor: {s_yarım['volume_ratio']:.2f}x"
+# ...ve patlama YALNIZCA oluşan mumdaysa henüz sayılmamalı (mum kapanınca sayılır)
+s_erken = sc.score_symbol(frame(yatay, [100.0] * 199 + [500.0]), daily_ema=95.0)
+assert s_erken["components"]["hacim_patlaması"] == 0.0, s_erken["components"]
+print(f"✓ oluşmakta olan mum hacmi bozmuyor ({s_yarım['volume_ratio']:.2f}x, "
+      f"eskiden 0.15x görünürdü)")
 
 # --- 3) Trend bileşeni: EMA üstü/altı ---------------------------------------
 üst = sc.score_symbol(frame(yatay), daily_ema=90.0)
