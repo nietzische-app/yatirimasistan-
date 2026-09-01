@@ -369,7 +369,7 @@ class TradingBot:
 
         def _run():
             try:
-                self.council.analyze(symbol, price)
+                self.council.analyze(symbol, price, broker=self.broker)
             except Exception as exc:
                 log.exception("[%s] kurul çalıştırılamadı: %s", symbol, exc)
                 db.add_log("ERROR", f"{symbol}: kurul çalıştırılamadı — {exc}", symbol)
@@ -659,7 +659,12 @@ def print_status() -> None:
     if not ok:
         print(f"    └─ {reason}")
     elif not halted:
-        print(f"    ├─ analistler    : {', '.join(config.AGENT_ANALYSTS)}")
+        print(f"    ├─ analistler    : {', '.join(config.analysts_for(config.SYMBOLS[0]))}"
+              f"  ({config.SYMBOLS[0]} için)")
+        print(f"    ├─ ek bağlam     : "
+              + (("portföy + canlı teknik"
+                  + (" + kripto sinyalleri" if config.CRYPTO_SIGNALS_ENABLED else ""))
+                 if config.AGENT_CONTEXT_ENABLED else "kapalı"))
         print(f"    ├─ model         : {config.LLM_DEEP_MODEL}")
         print(f"    ├─ sıklık        : {config.AGENT_INTERVAL_MINUTES} dk/sembol, "
               f"günde en fazla {config.AGENT_MAX_RUNS_PER_DAY}")
@@ -787,6 +792,8 @@ def main() -> None:
                         help="--test-llm ile: başka bir modeli dene")
     parser.add_argument("--resume-council", action="store_true",
                         help="Kalıcı hata sonrası durdurulan kurulu yeniden etkinleştir")
+    parser.add_argument("--context", metavar="SEMBOL", nargs="?", const="",
+                        help="Kurula gönderilen ek bağlamı (portföy/teknik/kripto) yazdır")
     args = parser.parse_args()
 
     if args.simulate:
@@ -840,13 +847,24 @@ def main() -> None:
 
     bot = TradingBot()
 
+    if args.context is not None:
+        symbol = args.context or config.SYMBOLS[0]
+        # Bağlam veritabanındaki son fiyat/tarama kaydından üretilir; boşsa
+        # bir tur çalıştırıp doldur ki kullanıcı gerçek çıktıyı görsün.
+        if symbol not in db.get_market():
+            bot.run_once()
+        print(f"\n--- {symbol} için kurula gönderilecek ek bağlam ---")
+        print(bot.council.context_for(symbol, bot.broker) or "(bağlam üretilemedi)")
+        return
+
     if args.convene is not None:
         symbol = args.convene or config.SYMBOLS[0]
         ok, reason = agents_engine.AgentCouncil.readiness()
         if not ok:
             print(f"Kurul çalıştırılamıyor: {reason}")
             return
-        print(bot.council.analyze(symbol, bot.market.fetch_price(symbol)))
+        print(bot.council.analyze(symbol, bot.market.fetch_price(symbol),
+                                  broker=bot.broker))
         return
 
     if args.once:

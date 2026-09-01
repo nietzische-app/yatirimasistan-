@@ -90,6 +90,23 @@ assert not at.exception, at.exception
 print("✓ işlem geçmişi + equity grafiği render oldu")
 print("   metrikler:", [(m.label, m.value) for m in at.metric])
 
+# 5b) Kurul tutanağı: raporlar ve kurula verdiğimiz ek bağlam render olmalı
+run_id = db.start_agent_run("BTC/USDT", 66300.0)
+db.finish_agent_run(
+    run_id, status="OK", rating="Overweight", action="BUY", size_factor=0.5,
+    proposed_stop=61000.0, duration_sec=478.0,
+    reports={
+        "market_report": "RSI 45, EMA üstünde.",
+        "news_report": "Önemli bir gelişme yok.",
+        "final_trade_decision": "Rating: Overweight",
+        "operator_context": "## İŞLETMECİDEN EK BAĞLAM\n\n- Binance anlık fiyat 66,300.",
+    })
+at = AppTest.from_file(APP, default_timeout=90).run()
+assert not at.exception, at.exception
+başlıklar = [e.label for e in at.expander]
+assert any("ek bağlam" in b for b in başlıklar), başlıklar
+print("✓ kurul tutanağı ve 'kurula verdiğimiz ek bağlam' bölümü render oldu")
+
 # 6) Durdur
 stop = [b for b in at.button if "Durdur" in b.label][0]
 at = stop.click().run()

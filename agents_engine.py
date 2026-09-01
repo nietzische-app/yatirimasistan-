@@ -28,6 +28,7 @@ from typing import Any, Optional
 
 import config
 import database as db
+import market_context
 
 log = logging.getLogger("agents")
 
@@ -41,6 +42,37 @@ except Exception as exc:  # pragma: no cover
     DEFAULT_CONFIG, TradingAgentsGraph = None, None
     AGENTS_AVAILABLE = False
     IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+
+
+def _contextual_graph_class():
+    """
+    TradingAgentsGraph'ı, kendi canlı bağlamımızı ekleyecek biçimde genişletir.
+
+    Kütüphane her toplantının başında `resolve_instrument_context()` çağırır ve
+    dönen metni BÜTÜN ajanların promptuna koyar (trading_graph.py -> propagate).
+    Bu kancayı kullanınca submodule'ü çatallamadan portföyümüzü, canlı teknik
+    verimizi ve kripto göstergelerini kurula anlatabiliyoruz.
+
+    Bağlam ticker'a göre saklanır: aynı grafik nesnesi birden fazla sembol için
+    kullanıldığında biri diğerinin verisini görmesin.
+    """
+    if not AGENTS_AVAILABLE:
+        return None
+
+    class ContextualGraph(TradingAgentsGraph):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.extra_context: dict[str, str] = {}
+
+        def set_context(self, ticker: str, text: str) -> None:
+            self.extra_context[ticker] = text or ""
+
+        def resolve_instrument_context(self, ticker: str, asset_type: str = "stock") -> str:
+            base = super().resolve_instrument_context(ticker, asset_type)
+            extra = self.extra_context.get(ticker, "")
+            return f"{base}{extra}" if extra else base
+
+    return ContextualGraph
 
 
 # Panelde gösterilecek rapor alanları: (state anahtarı, başlık)
@@ -280,7 +312,9 @@ class AgentCouncil:
     """TradingAgents grafiğini kurar ve sembol başına çalıştırır."""
 
     def __init__(self) -> None:
-        self._graph = None
+        # Analist takımı sembol sınıfına göre değişiyor (kripto vs hisse), o
+        # yüzden grafik takım bileşimine göre önbelleğe alınır.
+        self._graphs: dict[tuple[str, ...], Any] = {}
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------- kurulum
@@ -334,22 +368,28 @@ class AgentCouncil:
         if config.FRED_API_KEY:
             os.environ["FRED_API_KEY"] = config.FRED_API_KEY
 
-    def graph(self):
-        """Grafiği bir kez kurar (kurulum saniyeler sürer, her turda tekrarlanmaz)."""
+    def graph(self, symbol: Optional[str] = None):
+        """
+        Bu sembolün analist takımına uygun grafiği döner (kurulum saniyeler
+        sürer; takım başına bir kez kurulup önbellekte tutulur).
+        """
+        analysts = config.analysts_for(symbol) if symbol else list(config.AGENT_ANALYSTS)
+        key = tuple(analysts)
         with self._lock:
-            if self._graph is None:
+            if key not in self._graphs:
                 ok, reason = self.readiness()
                 if not ok:
                     raise RuntimeError(reason)
                 self._export_env()
-                self._graph = TradingAgentsGraph(
-                    selected_analysts=config.AGENT_ANALYSTS,
+                graph_cls = _contextual_graph_class() or TradingAgentsGraph
+                self._graphs[key] = graph_cls(
+                    selected_analysts=analysts,
                     debug=False,
                     config=self._build_config(),
                 )
                 log.info("Kurul hazır | analistler: %s | model: %s",
-                         ", ".join(config.AGENT_ANALYSTS), config.LLM_DEEP_MODEL)
-            return self._graph
+                         ", ".join(analysts), config.LLM_DEEP_MODEL)
+            return self._graphs[key]
 
     # ------------------------------------------------------- sıklık kontrolü
     @staticmethod
@@ -391,13 +431,29 @@ class AgentCouncil:
         return datetime.now(timezone.utc) - started >= timedelta(minutes=wait)
 
     # ------------------------------------------------------------- çalıştır
-    def analyze(self, symbol: str, price: Optional[float] = None) -> dict:
+    @staticmethod
+    def context_for(symbol: str, broker=None) -> str:
+        """
+        Kurula verilecek ek bağlam. Bağlam üretilemezse toplantı yine yapılır:
+        eksik bilgiyle karar vermek, hiç karar vermemekten iyidir.
+        """
+        try:
+            return market_context.build(symbol, broker)
+        except Exception as exc:
+            log.warning("[%s] ek bağlam üretilemedi: %s", symbol, exc)
+            return ""
+
+    def analyze(self, symbol: str, price: Optional[float] = None, broker=None) -> dict:
         """
         Kurulu bir sembol için toplar. Sonucu ve tüm raporları veritabanına yazar.
         Dönen sözlük: {run_id, status, rating, action, size_factor, proposed_stop}
+
+        `broker` verilirse (Alpaca yürütücüsü) portföy durumumuz da kurulun
+        promptuna eklenir; verilmezse dahili sanal defter kullanılır.
         """
         run_id = db.start_agent_run(symbol, price)
         ticker = config.agent_ticker(symbol)
+        asset_type = "crypto" if config.is_crypto(symbol) else "stock"
         trade_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         started = time.time()
         result: dict[str, Any] = {"run_id": run_id, "status": "ERROR", "action": "HOLD",
@@ -406,12 +462,19 @@ class AgentCouncil:
 
         def _work():
             try:
-                state, signal = self.graph().propagate(ticker, trade_date, asset_type="crypto")
+                graph = self.graph(symbol)
+                # Kendi canlı bağlamımızı grafiğe yerleştir; propagate() bunu
+                # resolve_instrument_context üzerinden bütün ajanlara taşır.
+                if hasattr(graph, "set_context"):
+                    box["context"] = self.context_for(symbol, broker)
+                    graph.set_context(ticker, box["context"])
+                state, signal = graph.propagate(ticker, trade_date, asset_type=asset_type)
                 box["state"], box["signal"] = state, signal
             except Exception as exc:                     # ağ/kota/model hatası
                 box["error"] = f"{type(exc).__name__}: {exc}"
 
-        log.info("[%s] Kurul toplanıyor (ticker %s, %s)...", symbol, ticker, trade_date)
+        log.info("[%s] Kurul toplanıyor (ticker %s, %s, analistler: %s)...",
+                 symbol, ticker, trade_date, ", ".join(config.analysts_for(symbol)))
         worker = threading.Thread(target=_work, name=f"council-{symbol}", daemon=True)
         worker.start()
         worker.join(timeout=config.AGENT_RUN_TIMEOUT_SECONDS)
@@ -446,6 +509,10 @@ class AgentCouncil:
         action, size = rating_to_action(str(signal))
         stop = extract_stop_price(state, price) if config.AGENT_USE_PROPOSED_STOP else None
         reports = extract_reports(state)
+        # Kurula ne anlattığımız da tutanağın parçası: panelde görülebilsin ki
+        # "ajan neden böyle dedi" sorusu geriye dönük cevaplanabilsin.
+        if box.get("context"):
+            reports["operator_context"] = box["context"]
 
         db.finish_agent_run(run_id, status="OK", rating=str(signal), action=action,
                             size_factor=size, proposed_stop=stop, duration_sec=duration,

@@ -109,7 +109,19 @@ class FakeGraph:
         return self.state, self.signal
 
 council = ae.AgentCouncil()
-council._graph = FakeGraph("Buy", state)
+
+
+def install(graph):
+    """
+    Sahte grafiği kurula yerleştirir. Grafik artık analist takımına göre
+    önbelleklendiği için (kripto: market+news, hisse: dört analist) her olası
+    anahtara aynı sahteyi koyuyoruz; testler sembolden bağımsız çalışsın.
+    """
+    council._graphs = {tuple(config.analysts_for(s)): graph
+                       for s in ("BTC/USDT", "AAPL")}
+
+
+install(FakeGraph("Buy", state))
 res = council.analyze("BTC/USDT", price=100.0)
 assert res["status"] == "OK" and res["action"] == "BUY" and res["size_factor"] == 1.0
 assert abs(res["proposed_stop"] - 97.5) < 1e-9
@@ -127,7 +139,7 @@ assert db.get_agent_run(res["run_id"])["executed"] == 1
 print(f"✓ karar emre çevrildi: giriş {pos[0]['entry_price']:.2f}, stop {pos[0]['stop_loss']:.2f}")
 
 # --- 5) SELL kararı pozisyonu kapatır ---------------------------------------
-council._graph = FakeGraph("Sell", {"final_trade_decision": "Rating: Sell"})
+install(FakeGraph("Sell", {"final_trade_decision": "Rating: Sell"}))
 res2 = council.analyze("BTC/USDT", price=105.0)
 assert res2["action"] == "SELL"
 bot.apply_pending_decisions("BTC/USDT", 105.0)
@@ -137,7 +149,7 @@ print("✓ SAT kararı pozisyonu kapatıyor")
 
 # --- 6) HOLD hiçbir şey yapmaz ----------------------------------------------
 db.reset_account()
-council._graph = FakeGraph("Hold", {"final_trade_decision": "Rating: Hold"})
+install(FakeGraph("Hold", {"final_trade_decision": "Rating: Hold"}))
 council.analyze("ETH/USDT", price=3000.0)
 bot.apply_pending_decisions("ETH/USDT", 3000.0)
 assert not db.get_open_positions(), "BEKLE kararı işlem açmamalı"
@@ -146,7 +158,7 @@ print("✓ BEKLE kararı işlem açmıyor")
 # --- 7) Hata ve zaman aşımı yolları -----------------------------------------
 class BoomGraph:
     def propagate(self, *a, **k): raise RuntimeError("429 kota doldu")
-council._graph = BoomGraph()
+install(BoomGraph())
 res3 = council.analyze("BTC/USDT", price=100.0)
 assert res3["status"] == "ERROR" and res3["action"] == "HOLD"
 saved3 = db.get_agent_run(res3["run_id"])
@@ -162,7 +174,7 @@ class SlowGraph:
         return {}, "Buy"
 _orig = config.AGENT_RUN_TIMEOUT_SECONDS
 config.AGENT_RUN_TIMEOUT_SECONDS = 1
-council._graph = SlowGraph()
+install(SlowGraph())
 res4 = council.analyze("BTC/USDT", price=100.0)
 assert res4["status"] == "TIMEOUT", res4
 config.AGENT_RUN_TIMEOUT_SECONDS = _orig
@@ -175,7 +187,7 @@ class QuotaGraph:
     def propagate(self, *a, **k):
         raise RuntimeError("APIStatusError: Error code: 402 - {'error': "
                            "{'message': 'This request requires more credits'}}")
-council._graph = QuotaGraph()
+install(QuotaGraph())
 res_fatal = council.analyze("BTC/USDT", price=100.0)
 assert res_fatal["status"] == "ERROR"
 assert res_fatal.get("fatal"), "402 kalıcı hata olarak sınıflanmalı"
@@ -190,7 +202,7 @@ print("✓ --resume-council kurulu geri açıyor")
 class FlakyGraph:
     def propagate(self, *a, **k):
         raise RuntimeError("RateLimitError: 429 Too Many Requests")
-council._graph = FlakyGraph()
+install(FlakyGraph())
 council.analyze("BTC/USDT", price=100.0)
 assert not ae.AgentCouncil.halted(), "geçici hata (429) kurulu durdurmamalı"
 print("✓ geçici hata (429) kurulu durdurmuyor")

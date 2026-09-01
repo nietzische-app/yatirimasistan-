@@ -120,6 +120,7 @@ python bot.py --once        # tek tur tarayıp çık
 python bot.py --force       # panel "durduruldu" olsa bile çalış
 python bot.py --simulate    # internet olmadan sentetik fiyatlarla dene
 python bot.py --reset       # sanal bakiyeyi 10.000 USDT'ye döndür
+python bot.py --context BTC/USDT   # kurula gönderilen ek bağlamı yazdır
 python tests/test_strategy.py && python tests/test_dashboard.py   # testler
 ```
 
@@ -132,7 +133,8 @@ Al/sat kararını artık indikatör kuralları değil, bir **yapay zekâ kurulu*
 `trading_agents/` altında git submodule olarak gelir.
 
 ```
-Market · Social · News · Fundamentals analistleri
+Analistler  (kripto: Market + News · hisse: Market + Social + News + Fundamentals)
+   ⊕ İŞLETMECİDEN EK BAĞLAM: portföyümüz, canlı 15 dk verimiz, kripto sinyalleri
         ↓ raporlar
 🐂 Boğa  ↔  🐻 Ayı araştırmacı tartışması  (N tur)
         ↓ Araştırma Müdürünün hükmü
@@ -146,6 +148,46 @@ Nihai not: Buy / Overweight / Hold / Underweight / Sell
 Not → emir eşlemesi: **Buy** tam pozisyon, **Overweight** yarım, **Hold** bekle,
 **Sell/Underweight** varsa pozisyonu kapat. Stop-loss'u ajanlar önerir; öneri
 fiyatın %0.5–%15 altında değilse yok sayılıp `config.STOP_LOSS_PCT` kullanılır.
+
+### Kurulun kripto için ayarlanması
+
+TradingAgents hisse senedi dünyası için yazıldı. Kriptoda iki analist boşa
+çalışıyordu ve düzeltilmesi gereken üç boşluk vardı:
+
+**1. Kripto-kör analistler kapatıldı.** `fundamentals` bilanço, gelir tablosu ve
+F/K oranı okur — Bitcoin'in bilançosu yoktur. `social` StockTwits ve Reddit'e
+bakar; canlı loglarımızda bu uçlar `403`/`429` döndü. İkisi de veri bulamadan
+konuşup tartışmayı zehirliyordu. Kripto varsayılanı artık **market + news**
+(`AGENT_ANALYSTS_CRYPTO`); hisse senedinde dört analist aynen duruyor. Yan
+etkisi: toplantı başına LLM çağrısı ve maliyet kabaca yarıya iniyor.
+
+**2-3-4. `market_context.py`: ajanların göremediği veriyi prompta koyuyoruz.**
+TradingAgents her toplantının başında `resolve_instrument_context()` çağırıp
+dönen metni bütün ajanların promptuna koyar. Bu kancayı kullanıyoruz (submodule
+çatallanmadı), üç blok ekliyoruz:
+
+| Blok | İçerik | Neden |
+|---|---|---|
+| **Portföy durumumuz** | Nakit, alım gücü, bu varlıkta açık pozisyon var mı, giriş fiyatı, anlık K/Z, stop ve kâr al seviyeleri, son 4 kurul notu | Kendi pozisyonunu bilmeyen bir trader "sıfırdan al" ile "elde tut" arasındaki farkı göremez |
+| **Canlı teknik verimiz** | Binance anlık fiyat, 15 dk RSI, günlük EMA'ya göre konum, tarama sonucu (24s değişim, hacim oranı, sıra) | Ajanların araçları **günlük** mum çeker; bizim verimiz dakikalık ve borsadan doğrudan |
+| **Kripto piyasa sinyalleri** | Funding rate, açık pozisyon (Binance vadeli), Korku & Açgözlülük endeksi | Kriptoda konumlanmayı gösteren veri budur — hisse senedindeki bilançonun karşılığı |
+
+Her parça **en iyi çabadır**: bir servise ulaşılamazsa o satır düşer, toplantı
+yine yapılır. Dış servis sonuçları önbelleklenir (endeks 1 saat, vadeli veri 15
+dakika), yani sembol başına tekrar tekrar çağrılmaz.
+
+Kurula ne gönderildiğini görmek için:
+
+```bash
+python bot.py --context BTC/USDT
+```
+
+Aynı metin toplantı tutanağına da yazılır; panelde **"🗂️ Kurula verdiğimiz ek
+bağlam"** başlığı altında geriye dönük okunabilir — "ajan neden böyle dedi"
+sorusunun cevabı orada.
+
+Kapatmak: `AGENT_CONTEXT_ENABLED=False` (tamamı) veya
+`CRYPTO_SIGNALS_ENABLED=False` (yalnız funding/endeks bloğu).
 
 ### İki hızlı/yavaş katman
 
@@ -219,7 +261,7 @@ kadans = günde ~1000 çağrı.
 |---|---|---|
 | `AGENT_INTERVAL_MINUTES` | 60 | 180 → günde 3 kat az toplantı |
 | `AGENT_DEBATE_ROUNDS` / `AGENT_RISK_ROUNDS` | 2 / 2 | 1 / 1 → toplantı süresi ~yarıya iner |
-| `AGENT_ANALYSTS` | 4 analist | `market,news` → 2 analist |
+| `AGENT_ANALYSTS_CRYPTO` | `market,news` (zaten 2 analist) | `market` → tek analist |
 | `LLM_MAX_TOKENS` | sınırsız | 2000 → uzun cevaplar kesilir |
 
 ### Kurul çalışmıyorsa ne olur

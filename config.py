@@ -8,6 +8,7 @@ Her ayar istersen ortam değişkeni (environment variable) ile de ezilebilir.
 Örn:  export INITIAL_BALANCE=25000
 """
 
+import logging
 import os
 
 # --------------------------------------------------------------------------
@@ -177,6 +178,15 @@ LLM_MAX_RETRIES = _env_str("LLM_MAX_RETRIES", "3")
 AGENT_ANALYSTS = [a.strip() for a in
                   _env_str("AGENT_ANALYSTS", "market,social,news,fundamentals").split(",")
                   if a.strip()]
+# Kriptoda analist takımı farklıdır. "fundamentals" bilanço/F-K/gelir tablosu
+# okur -- Bitcoin'in bilançosu yoktur, ajan boş veriyle spekülasyon üretir.
+# "social" StockTwits/Reddit'e bakar; canlı loglarımızda bu uçlar 403/429
+# döndü, yani ajan yine boş veriyle konuşuyor. İkisi de tartışmaya gürültü
+# katıyor ve toplantı maliyetinin yarısını yiyor. Kripto için varsayılan:
+# teknik + haber. Hepsini geri isteyen .env'de AGENT_ANALYSTS_CRYPTO ile açar.
+AGENT_ANALYSTS_CRYPTO = [a.strip() for a in
+                         _env_str("AGENT_ANALYSTS_CRYPTO", "market,news").split(",")
+                         if a.strip()]
 AGENT_DEBATE_ROUNDS = _env_int("AGENT_DEBATE_ROUNDS", 2)       # boğa/ayı tartışma turu
 AGENT_RISK_ROUNDS = _env_int("AGENT_RISK_ROUNDS", 2)           # risk kurulu turu
 AGENT_OUTPUT_LANGUAGE = _env_str("AGENT_OUTPUT_LANGUAGE", "Turkish")
@@ -201,6 +211,34 @@ AGENT_USE_PROPOSED_STOP = _env_bool("AGENT_USE_PROPOSED_STOP", True)
 # Ajan önerisi bu sınırların dışındaysa yok sayılır (saçma stop'a karşı koruma)
 AGENT_STOP_MIN_PCT = _env_float("AGENT_STOP_MIN_PCT", 0.005)
 AGENT_STOP_MAX_PCT = _env_float("AGENT_STOP_MAX_PCT", 0.15)
+
+# --- Kurula verilen ek bağlam (market_context.py) ---
+# Ajanların araçları günlük mum + haber getirir; portföyümüzü, canlı 15
+# dakikalık verimizi ve kripto-yerli göstergeleri bilmez. Bunları prompta
+# ekliyoruz. Kapatmak: AGENT_CONTEXT_ENABLED=False
+AGENT_CONTEXT_ENABLED = _env_bool("AGENT_CONTEXT_ENABLED", True)
+# Funding rate / açık pozisyon / Korku-Açgözlülük endeksi. Dış servis
+# çağrısıdır (anahtar gerekmez); erişim yoksa satır sessizce atlanır.
+CRYPTO_SIGNALS_ENABLED = _env_bool("CRYPTO_SIGNALS_ENABLED", True)
+
+# TradingAgents'ın tanıdığı analist anahtarları. .env'de yazım hatası olursa
+# kütüphane grafik kurulurken ValueError atar ve kurul hiç toplanamaz; bu
+# yüzden bilinmeyen anahtarları burada eleyip uyarı basıyoruz.
+VALID_ANALYSTS = ("market", "social", "news", "fundamentals")
+
+
+# Bu sembol için hangi analistler toplanacak? Kripto ve hisse farklı takım
+# ister; is_crypto() aşağıda tanımlı olduğu için çağrı anında değerlendirilir.
+def analysts_for(symbol: str) -> list[str]:
+    wanted = AGENT_ANALYSTS_CRYPTO if is_crypto(symbol) else AGENT_ANALYSTS
+    valid = [a for a in wanted if a in VALID_ANALYSTS]
+    unknown = [a for a in wanted if a not in VALID_ANALYSTS]
+    if unknown:
+        logging.getLogger("config").warning(
+            "Bilinmeyen analist adı yok sayıldı: %s (geçerli: %s)",
+            ", ".join(unknown), ", ".join(VALID_ANALYSTS))
+    return valid or ["market"]     # en az bir analist zorunlu
+
 
 # Binance sembolünü ajanların veri sağlayıcısının anladığı tickera çevirir
 # (BTC/USDT -> BTCUSD -> yfinance'te BTC-USD).
@@ -297,6 +335,11 @@ def summary() -> dict:
         "Kurul sıklığı": f"{AGENT_INTERVAL_MINUTES} dk / sembol (günde en fazla {AGENT_MAX_RUNS_PER_DAY})",
         "Tarayıcı": (f"{len(WATCHLIST)} coin taranıyor, en iyi {SCREENER_TOP_N} kurula gidiyor"
                      if SCREENER_ENABLED else f"kapalı (sabit liste: {', '.join(SYMBOLS)})"),
-        "Ajanlar": ", ".join(AGENT_ANALYSTS) + f" | tartışma {AGENT_DEBATE_ROUNDS}, risk {AGENT_RISK_ROUNDS} tur",
+        "Ajanlar": (f"kripto: {', '.join(AGENT_ANALYSTS_CRYPTO)} | "
+                    f"hisse: {', '.join(AGENT_ANALYSTS)} | "
+                    f"tartışma {AGENT_DEBATE_ROUNDS}, risk {AGENT_RISK_ROUNDS} tur"),
+        "Ek bağlam": ("portföy + canlı teknik"
+                      + (" + kripto sinyalleri" if CRYPTO_SIGNALS_ENABLED else "")
+                      ) if AGENT_CONTEXT_ENABLED else "kapalı",
         "LLM": f"{LLM_DEEP_MODEL} @ {LLM_BACKEND_URL or 'varsayılan'}",
     }

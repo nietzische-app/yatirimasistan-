@@ -715,6 +715,12 @@ if runs:
             head[3].metric("Süre", f"{detail['duration_sec']:.0f} sn"
                            if detail.get("duration_sec") else "-")
 
+            # Kurula bizim verdiğimiz ek bağlam (portföy + canlı teknik + kripto)
+            if reports.get("operator_context"):
+                with st.expander("🗂️ Kurula verdiğimiz ek bağlam", expanded=False):
+                    st.caption("Ajanların kendi araçlarında olmayan, bizim ilettiğimiz veriler.")
+                    st.markdown(reports["operator_context"])
+
             # Analist raporları ve nihai karar
             for key, title in agents_engine.REPORT_FIELDS:
                 if reports.get(key):
