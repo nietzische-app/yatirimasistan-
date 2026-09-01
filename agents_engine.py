@@ -87,17 +87,65 @@ def extract_reports(state: dict) -> dict:
     return reports
 
 
-_STOP_RE = re.compile(
-    r"stop[\s\-]?loss\D{0,30}?([0-9][0-9,.]*)", re.IGNORECASE)
+# Ajanlar stop'u üç ayrı biçimde yazabiliyor:
+#   "stop-loss: 76,100"      -> mutlak fiyat
+#   "stop-loss at 2%"        -> girişe göre yüzde
+#   "%2 stop-loss" (Türkçe)  -> yüzde, işaret önde
+# Yüzdeyi fiyat sanmak stop'u 2 dolara koymak demektir; bu yüzden yüzde
+# kalıpları ÖNCE aranır.
+_STOP_PCT_RE = re.compile(
+    r"stop[\s\-]?loss\D{0,40}?%\s*([0-9]+(?:[.,][0-9]+)?)"       # stop-loss ... %2
+    r"|stop[\s\-]?loss\D{0,40}?([0-9]+(?:[.,][0-9]+)?)\s*%"      # stop-loss ... 2%
+    r"|%\s*([0-9]+(?:[.,][0-9]+)?)\D{0,20}?stop[\s\-]?loss",     # %2 stop-loss
+    re.IGNORECASE)
+
+_STOP_ABS_RE = re.compile(r"stop[\s\-]?loss\D{0,30}?([0-9][0-9.,]*)", re.IGNORECASE)
+
+
+def _to_number(raw: str) -> Optional[float]:
+    """
+    '76,100.50' (İngilizce), '76.100,50' (Türkçe) ve '76100' biçimlerini çözer.
+    Son ayırıcı hangisiyse ondalık odur; diğeri binlik ayırıcıdır.
+    """
+    text = (raw or "").strip().rstrip(".,")
+    if not text:
+        return None
+    last_dot, last_comma = text.rfind("."), text.rfind(",")
+    try:
+        if last_dot >= 0 and last_comma >= 0:
+            if last_comma > last_dot:                    # 76.100,50 -> Türkçe
+                return float(text.replace(".", "").replace(",", "."))
+            return float(text.replace(",", ""))          # 76,100.50 -> İngilizce
+        if last_comma >= 0:
+            # Tek virgül: ardından tam 3 hane geliyorsa binlik, değilse ondalık
+            return float(text.replace(",", "" if len(text) - last_comma == 4 else "."))
+        if last_dot >= 0 and len(text) - last_dot == 4:   # 76.100 -> binlik (Türkçe)
+            return float(text.replace(".", ""))
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _stop_from_text(text: str, price: float) -> Optional[float]:
+    """Metinden stop FİYATI çıkarır; yüzde ifadesi fiyata çevrilir."""
+    m = _STOP_PCT_RE.search(text)
+    if m:
+        pct = _to_number(next((g for g in m.groups() if g), None))
+        if pct is not None and 0 < pct < 100:
+            return price * (1 - pct / 100.0)
+    m = _STOP_ABS_RE.search(text)
+    if m:
+        return _to_number(m.group(1))
+    return None
 
 
 def extract_stop_price(state: dict, price: Optional[float]) -> Optional[float]:
     """
-    Ajanların önerdiği stop-loss fiyatı.
+    Ajanların önerdiği stop-loss FİYATI.
 
     Önce yapılandırılmış TraderProposal.stop_loss alanı aranır; yoksa karar
-    metninden sayı çekilir. Saçma değerlere karşı config'teki sınırlarla
-    doğrulanır (fiyatın %0.5 – %15 altında olmalı).
+    metninden çıkarılır (yüzde ifadeleri fiyata çevrilir). Sonuç config'teki
+    sınırlarla doğrulanır: fiyatın %0.5 – %15 altında değilse yok sayılır.
     """
     candidate: Optional[float] = None
 
@@ -113,18 +161,14 @@ def extract_stop_price(state: dict, price: Optional[float]) -> Optional[float]:
             except (TypeError, ValueError):
                 pass
 
-    if candidate is None:
+    if candidate is None and price:
         for key in ("trader_investment_plan", "final_trade_decision", "investment_plan"):
             text = state.get(key)
             if not text:
                 continue
-            m = _STOP_RE.search(str(text))
-            if m:
-                try:
-                    candidate = float(m.group(1).replace(",", ""))
-                    break
-                except ValueError:
-                    pass
+            candidate = _stop_from_text(str(text), price)
+            if candidate is not None:
+                break
 
     if candidate is None or not price:
         return None

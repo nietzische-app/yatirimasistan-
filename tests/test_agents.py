@@ -67,6 +67,37 @@ assert ae.extract_stop_price({"trader_proposal": _Proposal()}, 100.0) == 96.0, \
     "yapılandırılmış alan metinden önce gelmeli"
 print("✓ stop-loss çıkarımı (yapılandırılmış + metin) ve sınır kontrolü")
 
+# --- 3b) Stop metinden çıkarma: yüzde, mutlak, Türkçe/İngilizce sayı ---------
+_P = 78816.0
+_stop_cases = [
+    ("stop-loss at 2%", _P * 0.98),                    # İngilizce yüzde
+    ("Stop-Loss: %2 (girişin altında)", _P * 0.98),    # Türkçe yüzde, işaret önde
+    ("%2 stop-loss uygulanmalı", _P * 0.98),
+    ("stop-loss of 1.5% below entry", _P * 0.985),
+    ("stop-loss: 76,100", 76100.0),                    # İngilizce binlik
+    ("stop loss at $77,200.50", 77200.50),
+    ("stop-loss seviyesi 76.100", 76100.0),            # Türkçe binlik
+    ("stop-loss 76.100,50", 76100.50),                 # Türkçe binlik + ondalık
+    ("stop-loss 77000", 77000.0),
+    ("stop yok", None),
+]
+for _text, _expect in _stop_cases:
+    _got = ae._stop_from_text(_text, _P)
+    if _expect is None:
+        assert _got is None, f"{_text!r} -> {_got}"
+    else:
+        assert _got is not None and abs(_got - _expect) < 0.02, \
+            f"{_text!r} -> {_got}, beklenen {_expect}"
+print("✓ stop metni: yüzde ve mutlak fiyat, Türkçe/İngilizce sayı biçimleri")
+
+# Yüzdeyi fiyat sanma hatası tekrarlamasın (canlıda görüldü: stop 2.00 $ oldu)
+assert ae.extract_stop_price(
+    {"trader_investment_plan": "Giriş 78816, stop-loss %2, hedef %5"}, _P) is not None, \
+    "yüzde ifadesi geçerli bir stop fiyatına çevrilmeli"
+assert ae.extract_stop_price({"trader_investment_plan": "stop-loss 2"}, _P) is None, \
+    "fiyatın çok altındaki mutlak değer hâlâ reddedilmeli"
+print("✓ yüzde ifadesi fiyata çevriliyor, saçma mutlak değer reddediliyor")
+
 # --- 4) Sahte kurul: karar -> emir ------------------------------------------
 class FakeGraph:
     """propagate() imzasını taklit eder; LLM çağrısı yapmaz."""
