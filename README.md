@@ -264,6 +264,39 @@ kadans = günde ~1000 çağrı.
 | `AGENT_ANALYSTS_CRYPTO` | `market,news` (zaten 2 analist) | `market` → tek analist |
 | `LLM_MAX_TOKENS` | sınırsız | 2000 → uzun cevaplar kesilir |
 
+### Aynı anda tek toplantı
+
+Kurul sembolleri **sırayla** ele alır, paralel değil. Sebebi teknik:
+`TradingAgentsGraph`, checkpoint için açtığı SQLite bağlantısını nesnenin
+kendi üzerinde tutuyor. İki toplantı üst üste binince önce biten o bağlantıyı
+kapatıyor ve hâlâ süren diğeri `Cannot operate on a closed database` ile
+ölüyordu — 4-5 dakikalık LLM harcaması çöpe gidiyordu. Ajanların hafıza
+dosyası da aynı geçici dosya yolunu paylaştığı için eşzamanlı yazımda kayıt
+kaybı riski vardı.
+
+Maliyeti yok: toplantı 12-20 dakika, sembol başına aralık saatler. Sırası gelen
+sembol hızlı döngünün bir sonraki turunda (30 sn) alınır. Ek olarak her sembol
+kendi grafik nesnesini kullanır, böylece zaman aşımına uğrayıp arka planda
+sürmeye devam eden bir koşu bir sonrakini bozamaz.
+
+### Hangi coinler kurula gidebilir
+
+TradingAgents'ın veri katmanı kripto sembollerini Yahoo Finance'in `BASE-USD`
+biçimine çeviriyor, ama bunu yalnızca **tanıdığı 11 coin** için yapıyor:
+
+```
+BTC  ETH  SOL  XRP  ADA  DOGE  LTC  BCH  DOT  AVAX  LINK
+```
+
+Listede olmayan bir coin (UNI, AAVE, …) hisse senedi sanılıp Yahoo'da aranıyor,
+bulunamıyor ve her turda `NoMarketDataError` ile düşüyor. Bu yüzden tarama,
+kurulun analiz edemeyeceği coinleri adaylıktan **sıralamadan sonra** eliyor:
+elenen coin slot harcamaz, yerine bir sonraki uygun coin çıkar. Sebebi
+`python bot.py --screen` çıktısında yazılı.
+
+`WATCHLIST`'e bu 11'in dışında bir coin eklemek hata değil — taranır, panelde
+görünür, ama kurula gitmez.
+
 ### Kurul çalışmıyorsa ne olur
 
 LLM anahtarı yoksa, kota dolduysa veya toplantı hata alırsa: **sistem çökmez.**

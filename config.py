@@ -116,12 +116,16 @@ COOLDOWN_MINUTES = _env_int("COOLDOWN_MINUTES", 15)
 # yalnızca en ilgi çekici SCREENER_TOP_N coin kurula gider.
 SCREENER_ENABLED = _env_bool("SCREENER_ENABLED", False)
 
-# Ucuza taranacak coinler. Alpaca'da işlem görebilenleri seç:
-#   python bot.py --list-crypto
+# Ucuza taranacak coinler. İki koşulu birden sağlamalı:
+#   1. Alpaca'da işlem görmeli   -> python bot.py --list-crypto
+#   2. Kurulun veri sağlayıcısı tanımalı -> python bot.py --screen
+# İkincisi atlanırsa o coin her turda "NoMarketDataError" ile düşer. Liste
+# şu an TradingAgents'ın tanıdığı 11 kripto ile sınırlı; UNI ve AAVE bu
+# yüzden çıkarıldı (Yahoo Finance'te UNI-USD / AAVE-USD karşılığı yok).
 WATCHLIST = [s.strip() for s in _env_str(
     "WATCHLIST",
     "BTC/USDT,ETH/USDT,SOL/USDT,AVAX/USDT,LINK/USDT,DOT/USDT,"
-    "LTC/USDT,BCH/USDT,UNI/USDT,AAVE/USDT,XRP/USDT,DOGE/USDT"
+    "LTC/USDT,BCH/USDT,ADA/USDT,XRP/USDT,DOGE/USDT"
 ).split(",") if s.strip()]
 
 # Tarama sonucunda kaç coin kurula gitsin (maliyeti bu belirler)

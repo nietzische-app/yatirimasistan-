@@ -23,6 +23,7 @@ import os
 import re
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -73,6 +74,43 @@ def _contextual_graph_class():
             return f"{base}{extra}" if extra else base
 
     return ContextualGraph
+
+
+# Kurul aynı anda YALNIZCA BİR toplantı yapar.
+#
+# TradingAgentsGraph.begin_checkpoint() paylaşılan örnek durumunu değiştiriyor
+# (self.graph ve self._checkpointer_ctx). İki toplantı üst üste binerse, önce
+# biten kendi SQLite bağlantısını kapatıyor ve hâlâ süren diğeri
+# "Cannot operate on a closed database" ile ölüyor — 4-5 dakikalık LLM
+# harcaması çöpe gidiyor. Ajanların hafıza dosyası da (memory_log) aynı .tmp
+# yolunu paylaştığı için eşzamanlı yazımda kayıt kaybı riski var.
+#
+# Serileştirmenin bize maliyeti yok: toplantı 12-20 dk, sembol başına aralık
+# saatler. Sıradaki sembol hızlı döngünün bir sonraki turunda (30 sn) alınır.
+_RUN_LOCK = threading.Lock()
+
+
+def council_can_analyze(symbol: str) -> tuple[bool, str]:
+    """
+    Kurulun veri katmanı bu sembolü çözebiliyor mu?
+
+    TradingAgents kripto sembollerini Yahoo'nun `BASE-USD` biçimine çeviriyor,
+    ama bunu yalnızca TANIDIĞI bir liste için yapıyor. Listede olmayan bir coin
+    (ör. UNI, AAVE) hisse senedi sanılıp Yahoo'da aranıyor, bulunamıyor ve her
+    turda `NoMarketDataError` ile düşüyor. Bunu önceden bilip o coini kurula
+    hiç göndermemek, her seferinde aynı hatayı yemekten iyidir.
+    """
+    if not config.is_crypto(symbol):
+        return True, ""                      # hisse senetleri doğrudan geçer
+    try:
+        from tradingagents.dataflows.symbol_utils import crypto_base
+    except Exception:                        # submodule yoksa/taşındıysa engelleme
+        return True, ""
+    ticker = config.agent_ticker(symbol)
+    if crypto_base(ticker):
+        return True, ""
+    return False, (f"kurulun veri sağlayıcısı {ticker} sembolünü tanımıyor "
+                   f"(Yahoo Finance'te {symbol.split('/')[0]}-USD karşılığı yok)")
 
 
 # Panelde gösterilecek rapor alanları: (state anahtarı, başlık)
@@ -311,10 +349,17 @@ def openrouter_credit() -> Optional[dict]:
 class AgentCouncil:
     """TradingAgents grafiğini kurar ve sembol başına çalıştırır."""
 
+    # Aynı anda en fazla bu kadar grafik bellekte tutulur (her biri LLM
+    # istemcileri + araç kutusu taşır); fazlası en eskiden başlayarak atılır.
+    MAX_CACHED_GRAPHS = 6
+
     def __init__(self) -> None:
-        # Analist takımı sembol sınıfına göre değişiyor (kripto vs hisse), o
-        # yüzden grafik takım bileşimine göre önbelleğe alınır.
-        self._graphs: dict[tuple[str, ...], Any] = {}
+        # Grafik SEMBOL başına önbelleğe alınır. İki sebep: (1) analist takımı
+        # varlık sınıfına göre değişiyor, (2) TradingAgentsGraph checkpoint
+        # kurulumunu kendi üzerinde tutuyor — sembolleri ayrı nesnelere
+        # bölmek, zaman aşımına uğrayıp arka planda sürmeye devam eden bir
+        # toplantının bir sonrakini bozmasını engelliyor.
+        self._graphs: "OrderedDict[str, Any]" = OrderedDict()
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------- kurulum
@@ -370,25 +415,29 @@ class AgentCouncil:
 
     def graph(self, symbol: Optional[str] = None):
         """
-        Bu sembolün analist takımına uygun grafiği döner (kurulum saniyeler
-        sürer; takım başına bir kez kurulup önbellekte tutulur).
+        Bu sembolün grafiğini döner (kurulum saniyeler sürer; sembol başına bir
+        kez kurulup önbellekte tutulur, en eskiler sınırı aşınca atılır).
         """
-        analysts = config.analysts_for(symbol) if symbol else list(config.AGENT_ANALYSTS)
-        key = tuple(analysts)
+        key = symbol or (config.SYMBOLS[0] if config.SYMBOLS else "-")
+        analysts = config.analysts_for(key)
         with self._lock:
-            if key not in self._graphs:
-                ok, reason = self.readiness()
-                if not ok:
-                    raise RuntimeError(reason)
-                self._export_env()
-                graph_cls = _contextual_graph_class() or TradingAgentsGraph
-                self._graphs[key] = graph_cls(
-                    selected_analysts=analysts,
-                    debug=False,
-                    config=self._build_config(),
-                )
-                log.info("Kurul hazır | analistler: %s | model: %s",
-                         ", ".join(analysts), config.LLM_DEEP_MODEL)
+            if key in self._graphs:
+                self._graphs.move_to_end(key)         # en son kullanılan sona
+                return self._graphs[key]
+            ok, reason = self.readiness()
+            if not ok:
+                raise RuntimeError(reason)
+            self._export_env()
+            graph_cls = _contextual_graph_class() or TradingAgentsGraph
+            self._graphs[key] = graph_cls(
+                selected_analysts=analysts,
+                debug=False,
+                config=self._build_config(),
+            )
+            while len(self._graphs) > self.MAX_CACHED_GRAPHS:
+                self._graphs.popitem(last=False)
+            log.info("Kurul hazır (%s) | analistler: %s | model: %s",
+                     key, ", ".join(analysts), config.LLM_DEEP_MODEL)
             return self._graphs[key]
 
     # ------------------------------------------------------- sıklık kontrolü
@@ -405,6 +454,11 @@ class AgentCouncil:
     def resume() -> None:
         db.set_state("council_halted", "")
         db.add_log("INFO", "Kurul yeniden etkinleştirildi.")
+
+    @staticmethod
+    def busy() -> bool:
+        """Şu an bir toplantı sürüyor mu? (Aynı anda yalnız biri çalışır.)"""
+        return _RUN_LOCK.locked()
 
     @staticmethod
     def due(symbol: str) -> bool:
@@ -451,6 +505,31 @@ class AgentCouncil:
         `broker` verilirse (Alpaca yürütücüsü) portföy durumumuz da kurulun
         promptuna eklenir; verilmezse dahili sanal defter kullanılır.
         """
+        supported, why = council_can_analyze(symbol)
+        if not supported:
+            log.warning("[%s] kurul atlandı — %s", symbol, why)
+            return {"run_id": None, "status": "UNSUPPORTED", "action": "HOLD",
+                    "rating": None, "size_factor": 0.0, "proposed_stop": None,
+                    "error": why}
+
+        # Aynı anda tek toplantı (sebebi _RUN_LOCK'un yanında yazılı). Kilidi
+        # alamıyorsak kayıt bile açmıyoruz; sıra hızlı döngünün bir sonraki
+        # turunda kendiliğinden gelecek.
+        if not _RUN_LOCK.acquire(blocking=False):
+            log.info("[%s] başka bir toplantı sürüyor; sıraya alındı.", symbol)
+            return {"run_id": None, "status": "BUSY", "action": "HOLD",
+                    "rating": None, "size_factor": 0.0, "proposed_stop": None}
+
+        try:
+            return self._analyze_locked(symbol, price, broker)
+        finally:
+            # Zaman aşımında iş parçacığı arka planda sürebilir; kilidi yine de
+            # bırakıyoruz, yoksa kurul kalıcı olarak tıkanır. Sembol başına
+            # ayrı grafik nesnesi tuttuğumuz için o zombi koşu bir sonraki
+            # toplantının checkpoint bağlantısını bozamaz.
+            _RUN_LOCK.release()
+
+    def _analyze_locked(self, symbol: str, price: Optional[float], broker) -> dict:
         run_id = db.start_agent_run(symbol, price)
         ticker = config.agent_ticker(symbol)
         asset_type = "crypto" if config.is_crypto(symbol) else "stock"

@@ -229,4 +229,97 @@ try:
 finally:
     ae.TradingAgentsGraph = _gerçek
 
-print("\nBAĞLAM TESTLERİ GEÇTİ ✅")
+# --- 8) Aynı anda tek toplantı (checkpoint yarışı) --------------------------
+# Gerçekte olan: iki toplantı üst üste bindiğinde önce biten,
+# TradingAgentsGraph'ın paylaşılan checkpoint bağlantısını kapatıyor ve süren
+# diğeri "Cannot operate on a closed database" ile ölüyordu.
+import threading as _th
+import time as _time
+
+ae.TradingAgentsGraph = StubBase
+try:
+    başladı, devam_et = _th.Event(), _th.Event()
+
+    class BlockingGraph(StubBase):
+        def propagate(self, ticker, date, asset_type="stock"):
+            başladı.set()
+            devam_et.wait(10)
+            return {"final_trade_decision": "Rating: Hold"}, "Hold"
+
+    council2 = ae.AgentCouncil()
+    council2._export_env = lambda: None
+    council2._build_config = lambda: {}
+    from collections import OrderedDict
+    council2._graphs = OrderedDict(
+        (s, BlockingGraph(selected_analysts=["market"])) for s in ("BTC/USDT", "ETH/USDT"))
+
+    sonuçlar = {}
+    t = _th.Thread(target=lambda: sonuçlar.update(
+        birinci=council2.analyze("BTC/USDT", price=65_000.0)), daemon=True)
+    t.start()
+    assert başladı.wait(10), "ilk toplantı başlamadı"
+    assert ae.AgentCouncil.busy(), "toplantı sürerken busy() True olmalı"
+
+    önce = len(db.get_agent_runs(limit=100))
+    ikinci = council2.analyze("ETH/USDT", price=2_400.0)
+    assert ikinci["status"] == "BUSY", ikinci
+    assert ikinci["run_id"] is None, "reddedilen toplantı için kayıt açılmamalı"
+    assert len(db.get_agent_runs(limit=100)) == önce, "boşuna kayıt yazılmış"
+    print("✓ ikinci toplantı sıraya alınıyor, kayıt açılmıyor")
+
+    devam_et.set()
+    t.join(10)
+    assert sonuçlar["birinci"]["status"] == "OK", sonuçlar
+    assert not ae.AgentCouncil.busy(), "toplantı bitince kilit bırakılmalı"
+    print("✓ toplantı bitince kilit bırakılıyor")
+
+    # Grafikler sembol başına ayrı nesne olmalı: zaman aşımına uğrayıp arka
+    # planda süren bir koşu, bir sonraki sembolün checkpoint'ini bozmasın.
+    council3 = ae.AgentCouncil()
+    council3._export_env = lambda: None
+    council3._build_config = lambda: {}
+    assert council3.graph("BTC/USDT") is not council3.graph("ETH/USDT"), \
+        "her sembol kendi grafik nesnesini almalı"
+    assert council3.graph("BTC/USDT") is council3.graph("BTC/USDT"), "aynı sembol önbellekten"
+    for i in range(ae.AgentCouncil.MAX_CACHED_GRAPHS + 3):
+        council3.graph(f"X{i}/USDT")
+    assert len(council3._graphs) <= ae.AgentCouncil.MAX_CACHED_GRAPHS, \
+        f"önbellek sınırsız büyümüş: {len(council3._graphs)}"
+    print(f"✓ sembol başına ayrı grafik, önbellek {ae.AgentCouncil.MAX_CACHED_GRAPHS} ile sınırlı")
+finally:
+    ae.TradingAgentsGraph = _gerçek
+
+# --- 9) Kurulun analiz edemediği coinler --------------------------------- --
+ok_btc, _ = ae.council_can_analyze("BTC/USDT")
+ok_uni, sebep = ae.council_can_analyze("UNI/USDT")
+ok_hisse, _ = ae.council_can_analyze("NVDA")
+assert ok_btc and ok_hisse, "BTC ve hisse senedi analiz edilebilmeli"
+assert not ok_uni and "UNIUSD" in sebep, sebep
+print(f"✓ desteklenmeyen coin tanınıyor: {sebep}")
+
+önce = len(db.get_agent_runs(limit=100))
+sonuç = ae.get_council().analyze("UNI/USDT", price=5.8)
+assert sonuç["status"] == "UNSUPPORTED" and sonuç["run_id"] is None, sonuç
+assert len(db.get_agent_runs(limit=100)) == önce, \
+    "analiz edilemeyen coin için kayıt açılmamalı"
+print("✓ desteklenmeyen coin kurula hiç gönderilmiyor (boşuna hata kaydı yok)")
+
+# Elenen coin aday slotunu harcamamalı: sırada altındaki uygun coin çıkmalı
+import screener as sc
+
+
+class SahteTarayıcı(sc.Screener):
+    def __init__(self, sıra):
+        self._sıra = sıra
+
+    def scan(self, symbols=None):
+        return [{"symbol": s, "score": 1.0 - i / 10, "rank": i + 1}
+                for i, s in enumerate(self._sıra)]
+
+tar = SahteTarayıcı(["UNI/USDT", "AAVE/USDT", "BTC/USDT", "ETH/USDT"])
+seçilen = tar.candidates(top_n=2, keep=lambda s: ae.council_can_analyze(s)[0])
+assert seçilen == ["BTC/USDT", "ETH/USDT"], seçilen
+assert tar.candidates(top_n=2) == ["UNI/USDT", "AAVE/USDT"], "filtresiz davranış değişmemeli"
+print(f"✓ elenen coin slot harcamıyor, sıradaki uygun coin çıkıyor: {seçilen}")
+
+print("\nBAĞLAM VE EŞZAMANLILIK TESTLERİ GEÇTİ ✅")

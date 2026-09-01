@@ -361,6 +361,8 @@ class TradingBot:
         thread = self._council_threads.get(symbol)
         if thread is not None and thread.is_alive():
             return                              # bu sembol için toplantı sürüyor
+        if agents_engine.AgentCouncil.busy():
+            return                              # başka sembolde toplantı sürüyor
         if not agents_engine.AgentCouncil.due(symbol):
             return
         ok, reason = agents_engine.AgentCouncil.readiness()
@@ -443,10 +445,19 @@ class TradingBot:
         if self._candidates and now - self._last_screen < config.SCREENER_INTERVAL_MINUTES * 60:
             return self._candidates
         try:
-            self._candidates = self.screener().candidates()
+            # Kurulun veri sağlayıcısının tanımadığı coinler elenir: aksi halde
+            # her turda NoMarketDataError ile bir aday slotu boşa gider.
+            self._candidates = self.screener().candidates(
+                keep=lambda sym: agents_engine.council_can_analyze(sym)[0])
             self._last_screen = now
             log.info("Tarama: %d coin -> kurul adayları: %s",
                      len(config.WATCHLIST), ", ".join(self._candidates) or "-")
+            if not self._candidates:
+                # Sessizce boş dönmek yanıltıcı olurdu: sebebini söyle.
+                for sym in config.WATCHLIST:
+                    uygun, why = agents_engine.council_can_analyze(sym)
+                    if not uygun:
+                        log.warning("İzleme listesindeki %s kurula gidemez — %s", sym, why)
         except Exception as exc:
             log.warning("Tarama başarısız: %s", exc)
             if not self._candidates:
@@ -661,6 +672,7 @@ def print_status() -> None:
     elif not halted:
         print(f"    ├─ analistler    : {', '.join(config.analysts_for(config.SYMBOLS[0]))}"
               f"  ({config.SYMBOLS[0]} için)")
+        print(f"    ├─ eşzamanlılık  : aynı anda tek toplantı (sıradaki bekler)")
         print(f"    ├─ ek bağlam     : "
               + (("portföy + canlı teknik"
                   + (" + kripto sinyalleri" if config.CRYPTO_SIGNALS_ENABLED else ""))

@@ -113,12 +113,12 @@ council = ae.AgentCouncil()
 
 def install(graph):
     """
-    Sahte grafiği kurula yerleştirir. Grafik artık analist takımına göre
-    önbelleklendiği için (kripto: market+news, hisse: dört analist) her olası
-    anahtara aynı sahteyi koyuyoruz; testler sembolden bağımsız çalışsın.
+    Sahte grafiği kurula yerleştirir. Grafik sembol başına önbelleklendiği
+    için testlerde geçen her sembole aynı sahteyi koyuyoruz.
     """
-    council._graphs = {tuple(config.analysts_for(s)): graph
-                       for s in ("BTC/USDT", "AAPL")}
+    from collections import OrderedDict
+    council._graphs = OrderedDict(
+        (s, graph) for s in ("BTC/USDT", "ETH/USDT", "XRP/USDT", "AAPL"))
 
 
 install(FakeGraph("Buy", state))

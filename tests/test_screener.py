@@ -118,18 +118,45 @@ config.SCREENER_ENABLED = False
 assert bot.refresh_candidates() == list(config.SYMBOLS), "tarayıcı kapalıyken sabit liste"
 print("✓ tarayıcı kapalıyken davranış değişmiyor")
 
+# Bot entegrasyonunda gerçek coin adları gerekli: refresh_candidates artık
+# kurulun analiz edemediği coinleri eliyor.
+class GerçekAdlıMarket(FakeMarket):
+    """Aynı serileri kurulun tanıdığı coin adlarıyla verir."""
+    def __init__(self):
+        super().__init__()
+        self.series = {
+            "BTC/USDT": self.series["AAA/USDT"],     # sert düşüş -> ilginç
+            "ETH/USDT": self.series["BBB/USDT"],     # yatay -> sıkıcı
+            "SOL/USDT": self.series["CCC/USDT"],     # hafif yükseliş
+            "UNI/USDT": self.series["AAA/USDT"],     # ilginç AMA kurul analiz edemez
+        }
+
+bot._screener = sc.Screener(market=GerçekAdlıMarket())
 config.SCREENER_ENABLED = True
 config.SCREENER_TOP_N = 2
-config.WATCHLIST = ["AAA/USDT", "BBB/USDT", "CCC/USDT"]
+config.WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 bot._candidates, bot._last_screen = [], 0.0
 adaylar = bot.refresh_candidates()
-assert adaylar == ["AAA/USDT", "CCC/USDT"], adaylar
+assert adaylar == ["BTC/USDT", "SOL/USDT"], adaylar
+
+# Kurulun analiz edemediği coin en yüksek puanlı olsa bile slot harcamamalı:
+# yerine bir alttaki uygun coin çıkmalı.
+config.WATCHLIST = ["UNI/USDT", "BTC/USDT", "ETH/USDT", "SOL/USDT"]
+bot._candidates, bot._last_screen = [], 0.0
+adaylar_filtreli = bot.refresh_candidates()
+assert "UNI/USDT" not in adaylar_filtreli, adaylar_filtreli
+assert adaylar_filtreli == ["BTC/USDT", "SOL/USDT"], adaylar_filtreli
+print(f"✓ kurulun analiz edemediği coin adaylıktan eleniyor: {adaylar_filtreli}")
+
+config.WATCHLIST = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+bot._candidates, bot._last_screen = [], 0.0
+bot.refresh_candidates()
 
 # Açık pozisyon aday olmasa da izlenmeli (korumasız kalmasın)
-bot.open_trade("BBB/USDT", 100.0, reason="test")
+bot.open_trade("ETH/USDT", 100.0, reason="test")
 aktif = bot.active_symbols()
-assert "BBB/USDT" in aktif, f"açık pozisyon izlenmeli: {aktif}"
-assert "AAA/USDT" in aktif and "CCC/USDT" in aktif
+assert "ETH/USDT" in aktif, f"açık pozisyon izlenmeli: {aktif}"
+assert "BTC/USDT" in aktif and "SOL/USDT" in aktif
 print(f"✓ aktif semboller = adaylar + açık pozisyonlar ({len(aktif)} sembol)")
 
 config.SCREENER_ENABLED, config.SYMBOLS, config.SCREENER_TOP_N = _en, _syms, _top

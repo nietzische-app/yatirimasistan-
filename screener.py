@@ -122,10 +122,20 @@ class Screener:
         return rows
 
     def candidates(self, top_n: Optional[int] = None,
-                   symbols: Optional[list[str]] = None) -> list[str]:
-        """Kurulun toplanacağı sembolleri döner (en yüksek puanlı N tane)."""
+                   symbols: Optional[list[str]] = None,
+                   keep=None) -> list[str]:
+        """
+        Kurulun toplanacağı sembolleri döner (en yüksek puanlı N tane).
+
+        `keep(symbol) -> bool` verilirse eleme SIRALAMADAN SONRA, sayım
+        yapılmadan önce uygulanır: kurulun analiz edemediği bir coin birinci
+        sırada olsa bile slotu harcamaz, yerine bir sonraki uygun coin çıkar.
+        """
         top_n = top_n or config.SCREENER_TOP_N
-        return [r["symbol"] for r in self.scan(symbols)[:top_n]]
+        sıralı = [r["symbol"] for r in self.scan(symbols)]
+        if keep is not None:
+            sıralı = [s for s in sıralı if keep(s)]
+        return sıralı[:top_n]
 
 
 def print_scan(rows: list[dict]) -> None:
@@ -140,8 +150,18 @@ def print_scan(rows: list[dict]) -> None:
               f"{r['change_24h']:>+7.2f}% {r['volume_ratio']:>6.1f}x "
               f"{'↑' if c['trend_yukarı'] else '↓':>5} {r['score']:>6.3f}")
     if rows:
-        top = rows[:config.SCREENER_TOP_N]
-        print(f"\n  Kurul şunlar için toplanacak: {', '.join(r['symbol'] for r in top)}")
+        try:
+            from agents_engine import council_can_analyze
+        except Exception:
+            council_can_analyze = None
+        uygun, elenen = [], []
+        for r in rows:
+            ok, why = council_can_analyze(r["symbol"]) if council_can_analyze else (True, "")
+            (uygun if ok else elenen).append((r["symbol"], why))
+        print(f"\n  Kurul şunlar için toplanacak: "
+              f"{', '.join(s for s, _ in uygun[:config.SCREENER_TOP_N])}")
+        for sym, why in elenen:
+            print(f"  ⚠ {sym} elendi: {why}")
     print(f"{line}\n")
 
 
