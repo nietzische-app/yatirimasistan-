@@ -136,6 +136,14 @@ class AlpacaExecutor:
                 return p
         return None
 
+    def tradable_crypto(self) -> list[str]:
+        """Alpaca'da alınıp satılabilen kripto çiftleri (WATCHLIST için)."""
+        from alpaca.trading.enums import AssetClass, AssetStatus
+        from alpaca.trading.requests import GetAssetsRequest
+        assets = self.client().get_all_assets(GetAssetsRequest(
+            asset_class=AssetClass.CRYPTO, status=AssetStatus.ACTIVE))
+        return sorted(a.symbol for a in assets if getattr(a, "tradable", False))
+
     def market_open(self) -> Optional[bool]:
         try:
             return bool(self.client().get_clock().is_open)

@@ -67,9 +67,13 @@ def calculate_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     avg_loss = loss.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
     rs = avg_gain / avg_loss.replace(0.0, np.nan)
     rsi = 100.0 - (100.0 / (1.0 + rs))
-    # Hiç kayıp yoksa RSI = 100, hiç kazanç yoksa RSI = 0
+    # Hiç kayıp yoksa RSI = 100, hiç kazanç yoksa RSI = 0.
     rsi = rsi.where(avg_loss != 0.0, 100.0)
     rsi = rsi.where(avg_gain != 0.0, 0.0)
+    # Fiyat hiç kıpırdamadıysa (ne kazanç ne kayıp) RSI tanımsızdır; 0 demek
+    # "dibe vurdu" anlamına gelir ve düşük hacimli, aynı fiyattan kapanan
+    # coinleri yanlışlıkla aşırı satım gösterir. Nötr 50 doğrusu.
+    rsi = rsi.where((avg_gain != 0.0) | (avg_loss != 0.0), 50.0)
     return rsi
 
 
@@ -194,6 +198,9 @@ class TradingBot:
         self._council_threads: dict[str, threading.Thread] = {}
         self.council = agents_engine.get_council()
         self.broker: Optional[alpaca_execution.AlpacaExecutor] = None
+        self._screener = None
+        self._last_screen = 0.0
+        self._candidates: list[str] = []
         ok, reason = agents_engine.AgentCouncil.readiness()
         log.info("Karar motoru: %s", "TradingAgents kurulu" if ok else f"KAPALI — {reason}")
         db.set_state("decision_engine", "agents" if ok else f"kapalı: {reason}")
@@ -415,6 +422,61 @@ class TradingBot:
 
             db.mark_agent_run_executed(run["id"])
 
+    # -------------------------------------------------------------- tarayıcı
+    def screener(self):
+        if self._screener is None:
+            from screener import Screener
+            self._screener = Screener(self.market)
+        return self._screener
+
+    def refresh_candidates(self) -> list[str]:
+        """
+        Kurulun bakacağı adayları belirler.
+
+        Tarayıcı kapalıysa config.SYMBOLS. Açıksa izleme listesi ucuza taranır
+        ve en yüksek puanlı SCREENER_TOP_N coin seçilir. Tarama bedava olduğu
+        için sık, kurul pahalı olduğu için seyrek çalışır.
+        """
+        if not config.SCREENER_ENABLED:
+            return list(config.SYMBOLS)
+        now = time.time()
+        if self._candidates and now - self._last_screen < config.SCREENER_INTERVAL_MINUTES * 60:
+            return self._candidates
+        try:
+            self._candidates = self.screener().candidates()
+            self._last_screen = now
+            log.info("Tarama: %d coin -> kurul adayları: %s",
+                     len(config.WATCHLIST), ", ".join(self._candidates) or "-")
+        except Exception as exc:
+            log.warning("Tarama başarısız: %s", exc)
+            if not self._candidates:
+                self._candidates = list(config.SYMBOLS)
+        return self._candidates
+
+    def active_symbols(self) -> list[str]:
+        """
+        Hızlı döngünün ilgileneceği semboller: sabit liste + açık pozisyonlar
+        + tarayıcı adayları. Açık pozisyon listeden düşse bile korumasız
+        kalmamalı, o yüzden her zaman dahil.
+        """
+        symbols = list(config.SYMBOLS)
+        for pos in db.get_open_positions():
+            if pos["symbol"] not in symbols:
+                symbols.append(pos["symbol"])
+        if self.backend == "alpaca" and self.broker is not None:
+            try:
+                for p in self.broker.positions():
+                    ours = p["symbol"].replace("/", "")
+                    for w in config.WATCHLIST + config.SYMBOLS:
+                        if config.alpaca_symbol(w).replace("/", "") == ours and w not in symbols:
+                            symbols.append(w)
+            except Exception as exc:
+                log.debug("Alpaca pozisyonları okunamadı: %s", exc)
+        for sym in self.refresh_candidates():
+            if sym not in symbols:
+                symbols.append(sym)
+        return symbols
+
     # ------------------------------------------------------------ ana turlar
     def process_symbol(self, symbol: str) -> None:
         """Hızlı döngü: fiyat + korumalar + kurul kararlarının uygulanması."""
@@ -463,8 +525,10 @@ class TradingBot:
         # 2) Kurulun tamamlanmış kararlarını uygula
         self.apply_pending_decisions(symbol, price)
 
-        # 3) Zamanı geldiyse yeni toplantıyı arka planda başlat
-        self.maybe_convene(symbol, price)
+        # 3) Zamanı geldiyse yeni toplantıyı arka planda başlat.
+        #    Tarayıcı açıkken yalnızca aday coinler için kurul toplanır.
+        if not config.SCREENER_ENABLED or symbol in self._candidates:
+            self.maybe_convene(symbol, price)
 
         last = db.get_agent_runs(limit=1, symbol=symbol)
         signal = "POZİSYONDA" if self.has_position(symbol) else (
@@ -491,8 +555,8 @@ class TradingBot:
         self._last_equity_snapshot = now
 
     def run_once(self) -> None:
-        """Tüm sembolleri bir kez tarar."""
-        for symbol in config.SYMBOLS:
+        """Aktif sembolleri bir kez işler."""
+        for symbol in self.active_symbols():
             try:
                 self.process_symbol(symbol)
             except Exception as exc:
@@ -709,6 +773,10 @@ def main() -> None:
                         help="Kurulu hemen topla (sıklık sınırını atlar) ve çık")
     parser.add_argument("--status", action="store_true",
                         help="Sistemin tam durumunu yazdır ve çık")
+    parser.add_argument("--screen", action="store_true",
+                        help="İzleme listesini tara ve kurul adaylarını göster")
+    parser.add_argument("--list-crypto", action="store_true",
+                        help="Alpaca'da işlem görebilen kripto çiftlerini listele")
     parser.add_argument("--list-models", metavar="ARAMA", nargs="?", const="",
                         help="OpenRouter modellerini listele (araç çağırma desteğiyle)")
     parser.add_argument("--capable-only", action="store_true",
@@ -733,6 +801,24 @@ def main() -> None:
 
     if args.status:
         print_status()
+        return
+
+    if args.screen:
+        import screener
+        db.init_db()
+        screener.print_scan(screener.Screener().scan())
+        return
+
+    if args.list_crypto:
+        ok, why = alpaca_execution.AlpacaExecutor.readiness()
+        if not ok:
+            print(f"Alpaca kullanılamıyor: {why}")
+            return
+        pairs = alpaca_execution.get_executor().tradable_crypto()
+        print(f"\nAlpaca'da işlem görebilen {len(pairs)} kripto çifti:\n")
+        for i in range(0, len(pairs), 6):
+            print("  " + "  ".join(f"{p:<12}" for p in pairs[i:i + 6]))
+        print("\n  .env içindeki WATCHLIST'e bunlardan seç (BTC/USD -> BTC/USDT yaz).\n")
         return
 
     if args.list_models is not None:

@@ -170,6 +170,20 @@ CREATE TABLE IF NOT EXISTS broker_orders (
     updated_at        TEXT
 );
 
+CREATE TABLE IF NOT EXISTS screener_results (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    symbol      TEXT NOT NULL,
+    rank        INTEGER,
+    score       REAL,
+    price       REAL,
+    rsi         REAL,
+    change_24h  REAL,
+    volume_ratio REAL,
+    components  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_screener_ts ON screener_results(ts);
 CREATE INDEX IF NOT EXISTS idx_broker_orders_symbol ON broker_orders(symbol, id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_symbol ON agent_runs(symbol, id);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
@@ -564,6 +578,40 @@ def agent_runs_today() -> int:
             "SELECT COUNT(*) AS c FROM agent_runs WHERE started_at >= ?", (today + " 00:00:00",)
         ).fetchone()
     return int(row["c"])
+
+
+# --------------------------------------------------------------------------
+# Tarayıcı sonuçları
+# --------------------------------------------------------------------------
+def save_screener_results(rows: list[dict]) -> None:
+    """Son taramayı kaydeder (eskisini siler; yalnız güncel sıralama tutulur)."""
+    ensure_db()
+    now = utcnow()
+    with get_connection() as conn:
+        conn.execute("DELETE FROM screener_results")
+        conn.executemany(
+            "INSERT INTO screener_results (ts, symbol, rank, score, price, rsi,"
+            " change_24h, volume_ratio, components) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(now, r["symbol"], r.get("rank"), r.get("score"), r.get("price"),
+              r.get("rsi"), r.get("change_24h"), r.get("volume_ratio"),
+              json.dumps(r.get("components"), ensure_ascii=False)) for r in rows])
+    set_state("last_screen", now)
+
+
+def get_screener_results(limit: int = 50) -> list[dict]:
+    ensure_db()
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM screener_results ORDER BY rank LIMIT ?", (int(limit),)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["components"] = json.loads(d["components"]) if d["components"] else {}
+        except (TypeError, ValueError):
+            d["components"] = {}
+        out.append(d)
+    return out
 
 
 # --------------------------------------------------------------------------

@@ -20,6 +20,7 @@ kontrol paneli.
 ├── bot.py                    # Ticaret motoru: veri çekme, indikatör, al/sat kararı
 ├── agents_engine.py          # TradingAgents kurulunu çalıştırır, kararı ve raporları yazar
 ├── alpaca_execution.py       # Kararları Alpaca Paper Trading'e emir olarak gönderir
+├── screener.py               # Çok coini ucuza tarar, kurul adaylarını seçer
 ├── llm_check.py              # Seçilen modelin kurul için uygunluğunu ölçer
 ├── trading_agents/           # TradingAgents reposu (git submodule, Apache-2.0)
 ├── backtest.py               # RSI/EMA taban çizgisini geçmiş veride sınama
@@ -45,6 +46,7 @@ kontrol paneli.
     ├── test_agents.py        # Kurul entegrasyonu (LLM anahtarı gerekmez, sahte kurul)
     ├── test_alpaca.py        # Alpaca emir yürütme (API anahtarı gerekmez, sahte istemci)
     ├── test_llm_check.py     # Model uygunluk testinin kendisi
+    ├── test_screener.py      # Tarayıcı: puanlama, sıralama, bot entegrasyonu
     ├── test_backtest.py      # Backtest motoru testleri
     └── test_dashboard.py     # Paneli gerçekten çalıştıran render testi
 ```
@@ -231,6 +233,41 @@ hata panelde "Başarısız toplantılar" altında görünür.
 `bot.py`'deki al-sat kuralları **kaldırıldı**. İndikatörler yalnızca iki yerde
 kaldı: panelde gösterilen piyasa görüntüsü ve `backtest.py`. Backtest artık bir
 **taban çizgisi**: kurul, basit RSI/EMA kuralını yenebiliyor mu sorusunun ölçüsü.
+
+---
+
+## 🔎 Çok Coin Nasıl Taranır (iki kademeli huni)
+
+Kurulu her coin için çalıştırmak imkânsız: toplantı ~0.12 $, 3 saatte bir,
+500 coin = **ayda ~14.000 $**. Çözüm, pahalı düşünmeyi nereye harcayacağına
+karar veren ucuz bir ön eleme:
+
+```
+İZLEME LİSTESİ (onlarca coin)
+        ↓  tarama — bedava, 30 dakikada bir
+   RSI · hacim patlaması · oynaklık · günlük trend  →  ilgi puanı
+        ↓  en yüksek puanlı N coin
+   YAPAY ZEKÂ KURULU (pahalı, saatler)
+        ↓
+   AL / SAT / BEKLE
+```
+
+```bash
+python bot.py --list-crypto      # Alpaca'da işlem görenleri gör
+python bot.py --screen           # taramayı çalıştır, sıralamayı gör
+```
+
+```ini
+SCREENER_ENABLED=true
+SCREENER_TOP_N=2                 # maliyeti bu belirler, liste uzunluğu değil
+WATCHLIST=BTC/USDT,ETH/USDT,SOL/USDT,...
+```
+
+**Önemli:** maliyeti `WATCHLIST` uzunluğu değil, `SCREENER_TOP_N` belirler.
+100 coin taramak bedava; 100 coin için kurul toplamak ayda ~2.900 $.
+
+Açık pozisyonu olan coin, tarama listesinden düşse bile izlenmeye devam eder —
+korumasız kalmaz.
 
 ---
 

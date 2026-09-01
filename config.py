@@ -108,6 +108,28 @@ STOP_LOSS_PCT = _env_float("STOP_LOSS_PCT", 0.015)      # %1.5 zarar kes
 COOLDOWN_MINUTES = _env_int("COOLDOWN_MINUTES", 15)
 
 # --------------------------------------------------------------------------
+# 3A) TARAYICI: çok coini ucuza tara, kurulu birkaçı için topla
+# --------------------------------------------------------------------------
+# Kurul toplantısı ~0.12 $. Her coin için kurul toplamak ayda binlerce dolar
+# eder. Bunun yerine izleme listesi UCUZA taranır (yalnızca borsa API'si) ve
+# yalnızca en ilgi çekici SCREENER_TOP_N coin kurula gider.
+SCREENER_ENABLED = _env_bool("SCREENER_ENABLED", False)
+
+# Ucuza taranacak coinler. Alpaca'da işlem görebilenleri seç:
+#   python bot.py --list-crypto
+WATCHLIST = [s.strip() for s in _env_str(
+    "WATCHLIST",
+    "BTC/USDT,ETH/USDT,SOL/USDT,AVAX/USDT,LINK/USDT,DOT/USDT,"
+    "LTC/USDT,BCH/USDT,UNI/USDT,AAVE/USDT,XRP/USDT,DOGE/USDT"
+).split(",") if s.strip()]
+
+# Tarama sonucunda kaç coin kurula gitsin (maliyeti bu belirler)
+SCREENER_TOP_N = _env_int("SCREENER_TOP_N", 2)
+# Tarama ne sıklıkla yenilensin (bedava, sık olabilir)
+SCREENER_INTERVAL_MINUTES = _env_int("SCREENER_INTERVAL_MINUTES", 30)
+
+
+# --------------------------------------------------------------------------
 # 3B) KARAR MOTORU: TradingAgents çoklu ajan kurulu
 # --------------------------------------------------------------------------
 # Al/sat kararını artık RSI/EMA kuralları değil, TradingAgents kurulu verir.
@@ -273,6 +295,8 @@ def summary() -> dict:
                              or (EXECUTION_BACKEND == "auto" and ALPACA_API_KEY))
                          else "dahili sanal defter"),
         "Kurul sıklığı": f"{AGENT_INTERVAL_MINUTES} dk / sembol (günde en fazla {AGENT_MAX_RUNS_PER_DAY})",
+        "Tarayıcı": (f"{len(WATCHLIST)} coin taranıyor, en iyi {SCREENER_TOP_N} kurula gidiyor"
+                     if SCREENER_ENABLED else f"kapalı (sabit liste: {', '.join(SYMBOLS)})"),
         "Ajanlar": ", ".join(AGENT_ANALYSTS) + f" | tartışma {AGENT_DEBATE_ROUNDS}, risk {AGENT_RISK_ROUNDS} tur",
         "LLM": f"{LLM_DEEP_MODEL} @ {LLM_BACKEND_URL or 'varsayılan'}",
     }
