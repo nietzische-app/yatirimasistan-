@@ -312,7 +312,7 @@ class SahteTarayıcı(sc.Screener):
     def __init__(self, sıra):
         self._sıra = sıra
 
-    def scan(self, symbols=None):
+    def scan(self, symbols=None, holdings=None):
         return [{"symbol": s, "score": 1.0 - i / 10, "rank": i + 1}
                 for i, s in enumerate(self._sıra)]
 

@@ -80,6 +80,47 @@ assert üst["components"]["trend_yukarı"] == 1.0 and alt["components"]["trend_y
 assert üst["score"] > alt["score"]
 print("✓ günlük EMA üstündeki coin trend puanı alıyor")
 
+# --- 3b) Puanlama pozisyona göre yön değiştirir -----------------------------
+# Canlı taramada UNI %12.6 pump yapmış, RSI 75.8'de ve EN YÜKSEK puanlı aday
+# seçilmişti — en ağır bileşeni (aşırı satım) tam sıfırken. Sebebi oynaklığın
+# abs() kullanması ve pump sonrası trend puanının garanti gelmesiydi.
+pump = list(np.linspace(100, 112.6, 200))     # +%12.6, aşırı alım
+düşüş = list(np.linspace(100, 88, 200))       # -%12.0, aşırı satım
+
+pump_giriş = sc.score_symbol(frame(pump), daily_ema=85.0, holding=False)
+düşüş_giriş = sc.score_symbol(frame(düşüş), daily_ema=85.0, holding=False)
+assert düşüş_giriş["score"] > pump_giriş["score"], \
+    f"giriş ararken dip pumptan yüksek olmalı: {düşüş_giriş['score']} vs {pump_giriş['score']}"
+assert pump_giriş["components"]["oynaklık"] == 0.0, \
+    "giriş ararken yukarı hareket oynaklık puanı kazandırmamalı"
+print(f"✓ giriş modu: dip {düşüş_giriş['score']:.3f} > pump {pump_giriş['score']:.3f} "
+      f"(eskiden pump 0.400 ile 1. sıradaydı)")
+
+# Elimizdeyse soru tersine döner: pump = kâr realizasyonu konuşulmalı
+pump_çıkış = sc.score_symbol(frame(pump), daily_ema=85.0, holding=True)
+assert pump_çıkış["score"] > pump_giriş["score"], \
+    "pozisyondayken pump kurulun dikkatini çekmeli"
+assert pump_çıkış["components"]["mod"] == "çıkış"
+assert pump_çıkış["components"]["aşırı_alım"] > 0.5, pump_çıkış["components"]
+print(f"✓ çıkış modu: aynı pump {pump_giriş['score']:.3f} -> {pump_çıkış['score']:.3f}")
+
+# Pozisyondayken HER İKİ yöndeki sert hareket de önemli: pump kâr al demek,
+# çöküş zararı kes demek. Giriş ararken yalnızca düşüş sayılıyordu.
+düşüş_çıkış = sc.score_symbol(frame(düşüş), daily_ema=85.0, holding=True)
+assert pump_çıkış["components"]["oynaklık"] > 0.5, pump_çıkış["components"]
+assert pump_giriş["components"]["oynaklık"] == 0.0, pump_giriş["components"]
+assert düşüş_çıkış["components"]["oynaklık"] == düşüş_giriş["components"]["oynaklık"], \
+    "aşağı hareket her iki modda da aynı sayılmalı"
+print(f"✓ çıkış modunda yukarı hareket de sayılıyor "
+      f"(pump oynaklık: giriş 0.00 -> çıkış {pump_çıkış['components']['oynaklık']:.2f})")
+
+# Trend bileşeni: giriş ararken EMA üstü iyidir, elimizdeyken EMA altı uyarıdır
+yatay_üst = sc.score_symbol(frame(yatay), daily_ema=90.0, holding=True)
+yatay_alt = sc.score_symbol(frame(yatay), daily_ema=110.0, holding=True)
+assert yatay_alt["score"] > yatay_üst["score"], \
+    "pozisyondayken fiyatın EMA altına düşmesi kurulun konuşması gereken şeydir"
+print("✓ pozisyondayken trendin kırılması puan kazandırıyor")
+
 # --- 4) Sıralama ve veritabanına yazma --------------------------------------
 class FakeMarket:
     """Her sembole farklı bir seri verir."""
@@ -87,7 +128,7 @@ class FakeMarket:
         self.series = {
             "AAA/USDT": frame(list(np.linspace(100, 80, 200))),      # sert düşüş -> ilginç
             "BBB/USDT": frame([100.0] * 200),                        # yatay -> sıkıcı
-            "CCC/USDT": frame(list(np.linspace(100, 104, 200))),     # hafif yükseliş
+            "CCC/USDT": frame(list(np.linspace(100, 96, 200))),      # hafif düşüş
         }
     def fetch_ohlcv(self, symbol, timeframe=None, limit=None):
         if timeframe and timeframe != config.TIMEFRAME:
@@ -173,6 +214,20 @@ aktif = bot.active_symbols()
 assert "ETH/USDT" in aktif, f"açık pozisyon izlenmeli: {aktif}"
 assert "BTC/USDT" in aktif and "SOL/USDT" in aktif
 print(f"✓ aktif semboller = adaylar + açık pozisyonlar ({len(aktif)} sembol)")
+
+# Elimizdeki coin taramada "çıkış" moduyla puanlanmalı
+satırlar = sc.Screener(market=GerçekAdlıMarket()).scan(
+    ["BTC/USDT", "ETH/USDT"], holdings={"ETH/USDT"})
+modlar = {r["symbol"]: r["components"]["mod"] for r in satırlar}
+assert modlar == {"BTC/USDT": "giriş", "ETH/USDT": "çıkış"}, modlar
+print(f"✓ tarama modu pozisyona göre seçiliyor: {modlar}")
+
+# holdings verilmezse dahili defterden okunur (ETH/USDT açık pozisyonda)
+otomatik = {r["symbol"]: r["components"]["mod"]
+            for r in sc.Screener(market=GerçekAdlıMarket()).scan(["BTC/USDT", "ETH/USDT"])}
+assert otomatik["ETH/USDT"] == "çıkış", otomatik
+assert set(bot.held_symbols()) >= {"ETH/USDT"}, bot.held_symbols()
+print("✓ pozisyonlar otomatik algılanıyor (holdings verilmese de)")
 
 config.SCREENER_ENABLED, config.SYMBOLS, config.SCREENER_TOP_N = _en, _syms, _top
 print("\nTARAYICI TESTLERİ GEÇTİ ✅")

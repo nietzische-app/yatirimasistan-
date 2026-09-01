@@ -641,20 +641,39 @@ if config.SCREENER_ENABLED:
     )
     scan = db.get_screener_results(limit=60)
     if scan:
-        top_syms = {r["symbol"] for r in scan[:config.SCREENER_TOP_N]}
+        # Kurulun analiz edemediği coinler sıralamada görünür ama kurula
+        # gitmez; 🧠 işareti gerçekten toplanılacak olanları göstermeli.
+        uygun, elenen = [], {}
+        for r in scan:
+            ok, why = agents_engine.council_can_analyze(r["symbol"])
+            if ok:
+                uygun.append(r["symbol"])
+            else:
+                elenen[r["symbol"]] = why
+        top_syms = set(uygun[:config.SCREENER_TOP_N])
         scan_df = pd.DataFrame([{
             "#": r["rank"],
             "Coin": r["symbol"],
-            "Kurul": "🧠" if r["symbol"] in top_syms else "",
+            "Kurul": ("🧠" if r["symbol"] in top_syms
+                      else ("🚫" if r["symbol"] in elenen else "")),
             "Fiyat": fmt_price(r["price"]),
             "RSI": f"{r['rsi']:.1f}" if r["rsi"] is not None else "-",
             "24s %": r["change_24h"],
             "Hacim": f"{r['volume_ratio']:.1f}x" if r["volume_ratio"] else "-",
             "Trend": "↑" if (r["components"] or {}).get("trend_yukarı") else "↓",
+            # Puan pozisyondayken "çıkış" mantığıyla hesaplanır; hangi soruyu
+            # sorduğumuz görünsün.
+            "Mod": (r["components"] or {}).get("mod", "giriş"),
             "Puan": f"{r['score']:.3f}" if r["score"] is not None else "-",
         } for r in scan])
         render_table(scan_df, {"24s %": fmt_pct}, ["24s %"], height=320)
         st.caption(f"Son tarama: {local_time(db.get_state('last_screen'))}")
+        if elenen:
+            with st.expander(f"🚫 Kurulun analiz edemediği {len(elenen)} coin", expanded=False):
+                for sym, why in elenen.items():
+                    st.write(f"**{sym}** — {why}")
+        st.caption("Mod: *giriş* = pozisyonumuz yok, dip aranıyor · "
+                   "*çıkış* = pozisyondayız, kâr al / zararı kes konuşuluyor.")
     else:
         st.info("Henüz tarama yapılmadı. `docker compose exec bot python bot.py --screen`")
 

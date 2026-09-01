@@ -90,6 +90,21 @@ assert not at.exception, at.exception
 print("✓ işlem geçmişi + equity grafiği render oldu")
 print("   metrikler:", [(m.label, m.value) for m in at.metric])
 
+# 5a) Tarama tablosu: elenen coin 🚫 ile işaretlenmeli, 🧠 sıradakine geçmeli
+_scr = config.SCREENER_ENABLED
+config.SCREENER_ENABLED = True
+db.save_screener_results([
+    {"symbol": "UNI/USDT", "rank": 1, "score": 0.40, "price": 5.8, "rsi": 75.8,
+     "change_24h": 12.6, "volume_ratio": 0.2, "components": {"mod": "giriş"}},
+    {"symbol": "BTC/USDT", "rank": 2, "score": 0.32, "price": 78321.0, "rsi": 35.7,
+     "change_24h": 0.29, "volume_ratio": 1.1, "components": {"mod": "çıkış"}},
+])
+at = AppTest.from_file(APP, default_timeout=90).run()
+assert not at.exception, at.exception
+assert any("analiz edemediği" in e.label for e in at.expander),     [e.label for e in at.expander]
+print("✓ panel elenen coinleri ayrı gösteriyor")
+config.SCREENER_ENABLED = _scr
+
 # 5b) Kurul tutanağı: raporlar ve kurula verdiğimiz ek bağlam render olmalı
 run_id = db.start_agent_run("BTC/USDT", 66300.0)
 db.finish_agent_run(

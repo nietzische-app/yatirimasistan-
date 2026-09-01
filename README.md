@@ -279,6 +279,28 @@ sembol hızlı döngünün bir sonraki turunda (30 sn) alınır. Ek olarak her s
 kendi grafik nesnesini kullanır, böylece zaman aşımına uğrayıp arka planda
 sürmeye devam eden bir koşu bir sonrakini bozamaz.
 
+### Tarama puanı pozisyona göre yön değiştirir
+
+Tarayıcı iki farklı soru sorar ve hangisini sorduğu elimizde o coin olup
+olmamasına bağlıdır:
+
+| | **giriş** modu (pozisyon yok) | **çıkış** modu (pozisyondayız) |
+|---|---|---|
+| Soru | "Buradan alınır mı?" | "Elde tutulur mu?" |
+| Ana bileşen (0.40) | Aşırı **satım** (RSI düşük) | Aşırı **alım** (kâr realizasyonu) |
+| Oynaklık (0.20) | Yalnız **düşüş** sayılır | **Her iki yön** sayılır |
+| Trend (0.20) | Fiyat EMA **üstünde** | Fiyat EMA **altına düştü** |
+| Hacim (0.20) | Patlama | Patlama |
+
+Neden: canlı taramada UNI **%12.6 pump yapmış, RSI 75.8'de** ve *en yüksek
+puanlı aday* seçilmişti — en ağır bileşeni (aşırı satım) tam sıfırken. Sebep,
+oynaklığın `abs(değişim)` kullanması ve pump sonrası trend puanının garanti
+gelmesiydi; yani dip alımı için en kötü giriş noktası listenin başına
+çıkıyordu. Aynı coin şimdi giriş modunda 0.400 yerine **0.200** alıyor.
+Elimizde olsaydı 0.514 alırdı — çünkü o zaman konuşulacak şey kâr almaktır.
+
+Mod, `--screen` çıktısında ve panelin tarama tablosunda görünür.
+
 ### Hangi coinler kurula gidebilir
 
 TradingAgents'ın veri katmanı kripto sembollerini Yahoo Finance'in `BASE-USD`

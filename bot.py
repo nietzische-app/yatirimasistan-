@@ -448,7 +448,8 @@ class TradingBot:
             # Kurulun veri sağlayıcısının tanımadığı coinler elenir: aksi halde
             # her turda NoMarketDataError ile bir aday slotu boşa gider.
             self._candidates = self.screener().candidates(
-                keep=lambda sym: agents_engine.council_can_analyze(sym)[0])
+                keep=lambda sym: agents_engine.council_can_analyze(sym)[0],
+                holdings=self.held_symbols())
             self._last_screen = now
             log.info("Tarama: %d coin -> kurul adayları: %s",
                      len(config.WATCHLIST), ", ".join(self._candidates) or "-")
@@ -463,6 +464,22 @@ class TradingBot:
             if not self._candidates:
                 self._candidates = list(config.SYMBOLS)
         return self._candidates
+
+    def held_symbols(self) -> set[str]:
+        """
+        Şu an pozisyonda olduğumuz semboller — hangi yürütme arkasını
+        kullanıyorsak ondan. Tarayıcı bunlara "çıkış" gözüyle puan verir.
+        """
+        held: set[str] = {p["symbol"] for p in db.get_open_positions()}
+        if self.backend == "alpaca" and self.broker is not None:
+            try:
+                broker_pos = {p["symbol"].replace("/", "") for p in self.broker.positions()}
+                for w in config.WATCHLIST + config.SYMBOLS:
+                    if config.alpaca_symbol(w).replace("/", "") in broker_pos:
+                        held.add(w)
+            except Exception as exc:
+                log.debug("Alpaca pozisyonları okunamadı: %s", exc)
+        return held
 
     def active_symbols(self) -> list[str]:
         """
