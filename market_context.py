@@ -23,6 +23,7 @@ import logging
 import threading
 import time
 import urllib.request
+from datetime import datetime, timezone
 from typing import Optional
 
 import config
@@ -39,6 +40,17 @@ def _num(value, fmt: str = ",.2f", default: str = "?") -> str:
         return format(float(value), fmt)
     except (TypeError, ValueError):
         return default
+
+
+def _age_minutes(ts: Optional[str]) -> Optional[float]:
+    """Veritabanındaki UTC zaman damgasının kaç dakika önce yazıldığı."""
+    if not ts:
+        return None
+    try:
+        yazılan = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+    return (datetime.now(timezone.utc) - yazılan).total_seconds() / 60.0
 
 
 def _cached(key: str, ttl: int, producer):
@@ -137,6 +149,14 @@ def technical_section(symbol: str) -> list[str]:
         log.debug("Teknik bağlam alınamadı: %s", exc)
         return lines
 
+    yaş = _age_minutes(market.get("updated_at")) if market else None
+    if yaş is not None and yaş > config.CONTEXT_MAX_AGE_MINUTES:
+        # Bayat veriyi "anlık fiyat" diye sunmak, ajanlara yanlış şeye
+        # güvenmelerini söylemektir. Aday listesinden düşen semboller
+        # güncellenmiyor; böyle bir satır saatler öncesine ait olabilir.
+        log.info("[%s] piyasa verisi %.0f dk eski; teknik bağlam atlandı.", symbol, yaş)
+        market = None
+
     if market and market.get("price"):
         parts = [f"Binance anlık fiyat {_num(market['price'], ',.4f')}"]
         if market.get("rsi") is not None:
@@ -147,6 +167,14 @@ def technical_section(symbol: str) -> list[str]:
             parts.append(f"{config.EMA_PERIOD} periyotluk ({config.EMA_TIMEFRAME}) EMA "
                          f"{_num(market['ema'])} — fiyat bunun {trend}")
         lines.append("Kendi canlı verimiz: " + ", ".join(parts) + ".")
+
+    # Tarama tasarımı gereği SCREENER_INTERVAL_MINUTES'ta bir yenilenir; canlı
+    # fiyat eşiğiyle ölçmek onu neredeyse her zaman elerdi. İki tarama
+    # kaçırılmışsa artık güvenilmez sayıyoruz.
+    tarama_eşiği = max(config.CONTEXT_MAX_AGE_MINUTES,
+                       config.SCREENER_INTERVAL_MINUTES * 2)
+    if scan and (_age_minutes(scan.get("ts")) or 0) > tarama_eşiği:
+        scan = None
 
     if scan:
         lines.append(

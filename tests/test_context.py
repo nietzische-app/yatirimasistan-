@@ -110,6 +110,42 @@ db.update_market("ETH/USDT", price=4_000.0, rsi=61.0, ema=3_400.0, signal="BEKLE
 assert "ÜSTÜNDE" in " ".join(mc.technical_section("ETH/USDT"))
 print("✓ trend yönü fiyat/EMA ilişkisine göre doğru yazılıyor")
 
+# --- 4b) Bayat piyasa verisi "anlık" diye sunulmamalı ----------------------
+# Aday listesinden düşen semboller güncellenmiyor; canlı sistemde DOT'un
+# satırı 77 dakika eskiydi. Bunu "Binance anlık fiyat" diye göndermek,
+# ajanlara yanlış şeye güvenmelerini söylemek olurdu.
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+bayat = (_dt.now(_tz.utc) - _td(minutes=config.CONTEXT_MAX_AGE_MINUTES + 60)
+         ).strftime("%Y-%m-%d %H:%M:%S")
+with db.get_connection() as _c:
+    _c.execute("UPDATE market SET updated_at = ? WHERE symbol = ?", (bayat, "BTC/USDT"))
+assert "Binance anlık fiyat" not in " ".join(mc.technical_section("BTC/USDT")), \
+    "bayat fiyat 'anlık' diye sunulmamalı"
+assert "Binance anlık fiyat" not in mc.build("BTC/USDT")
+print(f"✓ {config.CONTEXT_MAX_AGE_MINUTES} dk'dan eski canlı fiyat bağlama girmiyor")
+
+# Tarama ayrı bir kaynak: tasarımı gereği 30 dakikada bir yenilenir, canlı
+# fiyat eşiğiyle ölçülmemeli. Ama iki tarama kaçırıldıysa o da düşmeli.
+assert any("Tarama:" in l for l in mc.technical_section("BTC/USDT")), \
+    "tarama satırı canlı fiyat eşiğiyle elenmemeli"
+çok_bayat = (_dt.now(_tz.utc) - _td(minutes=config.SCREENER_INTERVAL_MINUTES * 2 + 60)
+             ).strftime("%Y-%m-%d %H:%M:%S")
+with db.get_connection() as _c:
+    _c.execute("UPDATE screener_results SET ts = ?", (çok_bayat,))
+assert mc.technical_section("BTC/USDT") == [], \
+    f"iki tarama kaçırılmışsa o satır da düşmeli: {mc.technical_section('BTC/USDT')}"
+print(f"✓ tarama satırı ayrı eşikle korunuyor "
+      f"({config.SCREENER_INTERVAL_MINUTES * 2} dk)")
+
+# Tazelenince yine görünmeli
+db.update_market("BTC/USDT", price=65_000.0, rsi=28.4, ema=74_561.32, signal="BEKLE")
+db.save_screener_results([{"symbol": "BTC/USDT", "rank": 1, "score": 0.72,
+                           "price": 65_000.0, "rsi": 28.4, "change_24h": -4.1,
+                           "volume_ratio": 2.3, "components": {}}])
+assert "Binance anlık fiyat" in mc.build("BTC/USDT")
+print("✓ veri tazelenince teknik bağlam geri geliyor")
+
 # --- 5) Kripto-yerli sinyaller (sahte dış servisler) ------------------------
 mc._CACHE.clear()
 mc._CACHE["fng"] = (float("inf"), {"value": 18, "label": "Extreme Fear"})

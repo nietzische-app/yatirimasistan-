@@ -224,6 +224,10 @@ AGENT_CONTEXT_ENABLED = _env_bool("AGENT_CONTEXT_ENABLED", True)
 # Funding rate / açık pozisyon / Korku-Açgözlülük endeksi. Dış servis
 # çağrısıdır (anahtar gerekmez); erişim yoksa satır sessizce atlanır.
 CRYPTO_SIGNALS_ENABLED = _env_bool("CRYPTO_SIGNALS_ENABLED", True)
+# Piyasa satırı bu yaştan eskiyse kurula "anlık veri" diye gönderilmez.
+# Aday listesinden düşen semboller güncellenmez; saatlik eski bir fiyatı
+# "canlı" diye sunmak ajanlara yanlış şeye güvendirmektir.
+CONTEXT_MAX_AGE_MINUTES = _env_int("CONTEXT_MAX_AGE_MINUTES", 15)
 
 # TradingAgents'ın tanıdığı analist anahtarları. .env'de yazım hatası olursa
 # kütüphane grafik kurulurken ValueError atar ve kurul hiç toplanamaz; bu

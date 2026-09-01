@@ -176,6 +176,15 @@ Her parça **en iyi çabadır**: bir servise ulaşılamazsa o satır düşer, to
 yine yapılır. Dış servis sonuçları önbelleklenir (endeks 1 saat, vadeli veri 15
 dakika), yani sembol başına tekrar tekrar çağrılmaz.
 
+**Bayat veri gönderilmez.** Aday listesinden düşen semboller güncellenmiyor;
+böyle bir satır saatler öncesine ait olabilir. Bunu "Binance anlık fiyat" diye
+sunmak ajanlara yanlış şeye güvenmelerini söylemek olurdu. Canlı fiyat satırı
+`CONTEXT_MAX_AGE_MINUTES`'tan (varsayılan 15 dk) eskiyse düşer; tarama satırı
+tasarımı gereği daha seyrek yenilendiği için iki tarama aralığı kadar
+(`SCREENER_INTERVAL_MINUTES × 2`) tolere edilir. Döngü de piyasa satırını
+kurulu toplamadan **önce** yazar, böylece toplantı her zaman o turun verisiyle
+başlar.
+
 Kurula ne gönderildiğini görmek için:
 
 ```bash

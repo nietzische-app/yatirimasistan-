@@ -563,15 +563,21 @@ class TradingBot:
         # 2) Kurulun tamamlanmış kararlarını uygula
         self.apply_pending_decisions(symbol, price)
 
-        # 3) Zamanı geldiyse yeni toplantıyı arka planda başlat.
-        #    Tarayıcı açıkken yalnızca aday coinler için kurul toplanır.
-        if not config.SCREENER_ENABLED or symbol in self._candidates:
-            self.maybe_convene(symbol, price)
-
+        # 3) Piyasa görüntüsünü YAZ — kurulu toplamadan ÖNCE.
+        #    Kurul, market_context üzerinden bu satırı "Binance anlık fiyat"
+        #    diye okuyor. Önce toplantıyı başlatıp sonra yazsaydık ajanlara bir
+        #    önceki turun verisi giderdi; listeye yeni giren bir coin için bu
+        #    "bir önceki tur" saatler öncesi olabilir (aday listesinden düşen
+        #    semboller hiç güncellenmiyor).
         last = db.get_agent_runs(limit=1, symbol=symbol)
         signal = "POZİSYONDA" if self.has_position(symbol) else (
             last[0]["action"] if last and last[0]["status"] == "OK" else "BEKLE")
         db.update_market(symbol, price, rsi, ema, signal)
+
+        # 4) Zamanı geldiyse yeni toplantıyı arka planda başlat.
+        #    Tarayıcı açıkken yalnızca aday coinler için kurul toplanır.
+        if not config.SCREENER_ENABLED or symbol in self._candidates:
+            self.maybe_convene(symbol, price)
         log.info(
             "[%s] fiyat %s | RSI %s | EMA%s(%s) %s | %s",
             symbol,

@@ -328,4 +328,14 @@ assert any("pozisyonumuz yok" in m for m in kayıtlar), kayıtlar
 assert not _db2.get_open_positions("XRP/USDT"), "olmayan pozisyon kapatılamaz"
 print("✓ pozisyon yokken SAT kararı ne emir açıyor ne de sessizce yutuluyor")
 
+# --- 10) Kurul, BU TURUN verisiyle toplanmalı ------------------------------
+# Hata: process_symbol önce maybe_convene() çağırıp SONRA update_market()
+# yazıyordu; kurul bir önceki turun satırını "anlık fiyat" diye okuyordu.
+# Aday listesine yeni giren bir coin için o satır saatler öncesine ait olur.
+import inspect as _ins
+_kaynak = _ins.getsource(TradingBot.process_symbol)
+assert _kaynak.index("update_market") < _kaynak.index("maybe_convene"), \
+    "piyasa satırı kurul toplanmadan ÖNCE yazılmalı"
+print("✓ piyasa görüntüsü kurul toplanmadan önce yazılıyor")
+
 print("\nAJAN ENTEGRASYON TESTLERİ GEÇTİ ✅")
