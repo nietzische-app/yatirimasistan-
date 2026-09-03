@@ -796,6 +796,12 @@ def print_status() -> None:
                 print(f"    ├─ emir tutarı   : ~{ex.position_notional(1.0):,.2f} "
                       f"(pay %{config.ALPACA_POSITION_PCT * 100:g}, tavan "
                       f"{config.ALPACA_MAX_NOTIONAL:,.0f})")
+                eko = config.trade_economics(config.ALPACA_FEE_RATE)
+                print(f"    ├─ işlem başına  : kâr al {eko['net_win_pct']:+.2f}% / "
+                      f"stop {-eko['net_loss_pct']:.2f}% "
+                      f"(komisyon %{config.ALPACA_FEE_RATE * 100:g} düşülmüş)")
+                print(f"    ├─ başabaş       : işlemlerin %{eko['breakeven_win_rate']:.1f}'i "
+                      f"kâr etmeli — altındaysa sistem para kaybeder")
                 positions = ex.positions()
                 dolu = len(positions) >= config.MAX_OPEN_POSITIONS
                 print(f"    └─ pozisyon      : {len(positions)} / {config.MAX_OPEN_POSITIONS}"

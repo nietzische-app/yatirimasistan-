@@ -273,6 +273,33 @@ kadans = günde ~1000 çağrı.
 | `AGENT_ANALYSTS_CRYPTO` | `market,news` (zaten 2 analist) | `market` → tek analist |
 | `LLM_MAX_TOKENS` | sınırsız | 2000 → uzun cevaplar kesilir |
 
+### Komisyon: asıl düşman
+
+Ham `%2 kâr al / %1.5 zarar kes` oranı "1.33'e 1 lehimize" gibi görünür. Değil —
+komisyon iki yönden kesilir: kazançtan **düşer**, kayba **eklenir**.
+
+| Komisyon | Kazanan işlem | Kaybeden işlem | Başabaş kazanma oranı |
+|---|---|---|---|
+| Yok | +2.00% | −1.50% | %42.9 |
+| Dahili defter (%0.1) | +1.80% | −1.70% | **%48.6** |
+| **Alpaca kripto (%0.245)** | **+1.51%** | **−1.99%** | **%56.9** |
+
+Yani Alpaca'da işlemlerin **%57'sinden fazlası** kâr etmezse sistem para kaybeder.
+Aynı sentetik veri üzerinde aynı stratejinin sonucu:
+
+```bash
+python backtest.py --demo-data --fee 0.001     # getiri  -2.14%,  kâr faktörü 0.93
+python backtest.py --demo-data --fee 0.00245   # getiri -11.96%,  kâr faktörü 0.64
+```
+
+Kazanma oranı ikisinde de %51.3 — dahili eşiğin (48.6) üstünde ama Alpaca
+eşiğinin (56.9) çok altında. Backtest varsayılan olarak dahili oranı kullanır;
+**Alpaca için strateji doğrularken `--fee 0.00245` vermeyi unutma**, yoksa
+sonuç sistematik olarak iyimser çıkar.
+
+`--status` her toplantıda bu üç satırı gösterir (komisyon düşülmüş kâr/zarar ve
+başabaş eşiği), panel de artık iki arka ucun oranını ayrı ayrı yazar.
+
 ### Pozisyon limiti her iki arka uçta geçerli
 
 `MAX_OPEN_POSITIONS` (varsayılan 2) hem dahili sanal defterde hem **Alpaca'da**

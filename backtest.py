@@ -370,7 +370,12 @@ def print_report(res: Result) -> None:
     print(line)
     print(f"  İşlem sayısı         : {s['trades']:>12}  (ayda ~{s['trades_per_month']:.1f})")
     print(f"  Kazanan / kaybeden   : {s['wins']:>6} / {s['losses']:<5}")
-    print(f"  Kazanma oranı        : {s['win_rate']:>12.1f} %   (başa baş ~%48.6)")
+    # Başabaş oranı TP/SL ve KOMİSYONA bağlıdır; sabit yazmak yanıltır.
+    # Alpaca kripto komisyonu (%0.245) dahilinkinin ~2.5 katı ve eşiği
+    # %48.6'dan %56.9'a çıkarır — aynı strateji orada zarar edebilir.
+    _eko = config.trade_economics(p.fee, p.take_profit, p.stop_loss)
+    print(f"  Kazanma oranı        : {s['win_rate']:>12.1f} %   "
+          f"(başa baş %{_eko['breakeven_win_rate']:.1f}, komisyon %{p.fee * 100:g})")
     print(f"  Ort. kazanç / kayıp  : {s['avg_win_pct']:>+7.2f}% / {s['avg_loss_pct']:+.2f}%")
     print(f"  Kâr faktörü          : {s['profit_factor']:>12.2f}   (>1 kârlı)")
     print(f"  Maks. düşüş (DD)     : {s['max_drawdown_pct']:>12.2f} %")
@@ -454,6 +459,9 @@ def main() -> None:
     ap.add_argument("--rsi-buy", type=float), ap.add_argument("--rsi-sell", type=float)
     ap.add_argument("--tp", type=float), ap.add_argument("--sl", type=float)
     ap.add_argument("--ema", type=int), ap.add_argument("--slippage", type=float, default=0.0)
+    ap.add_argument("--fee", type=float, metavar="ORAN",
+                    help=f"Komisyon oranı (varsayılan dahili {config.FEE_RATE}; "
+                         f"Alpaca kripto için {config.ALPACA_FEE_RATE})")
     ap.add_argument("--save-trades", metavar="DOSYA", help="İşlemleri CSV'ye yaz")
     args = ap.parse_args()
 
@@ -474,7 +482,8 @@ def main() -> None:
     for s, df in data.items():
         print(f"{s}: {len(df):,} mum  {df.index[0]:%d.%m.%Y} – {df.index[-1]:%d.%m.%Y}")
 
-    base = Params(slippage=args.slippage)
+    base = Params(slippage=args.slippage,
+                  **({"fee": args.fee} if args.fee is not None else {}))
     for arg, field_name in (("rsi_buy", "rsi_buy"), ("rsi_sell", "rsi_sell"),
                             ("tp", "take_profit"), ("sl", "stop_loss"), ("ema", "ema_period")):
         val = getattr(args, arg)

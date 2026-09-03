@@ -148,4 +148,36 @@ db.set_bot_running(True);  assert db.is_bot_running()
 db.set_bot_running(False); assert not db.is_bot_running()
 print("✓ başlat/durdur bayrağı")
 
+
+
+# --- Komisyon düşülmüş işlem ekonomisi -------------------------------------
+# Ham %2 / %1.5 oranı "lehimize" görünür ama komisyon iki yönden kesilir:
+# kazançtan düşer, kayba EKLENİR. Başabaş oranı bilinmeden stratejinin kârlı
+# olup olmadığı söylenemez.
+eko_bedava = config.trade_economics(0.0)
+assert abs(eko_bedava["net_win_pct"] - config.TAKE_PROFIT_PCT * 100) < 1e-9
+assert abs(eko_bedava["net_loss_pct"] - config.STOP_LOSS_PCT * 100) < 1e-9
+print("✓ komisyon sıfırken ham oranlar aynen çıkıyor")
+
+eko = config.trade_economics(config.ALPACA_FEE_RATE)
+assert eko["net_win_pct"] < config.TAKE_PROFIT_PCT * 100, "komisyon kazancı azaltmalı"
+assert eko["net_loss_pct"] > config.STOP_LOSS_PCT * 100, "komisyon kaybı BÜYÜTMELİ"
+assert eko["breakeven_win_rate"] > eko_bedava["breakeven_win_rate"], \
+    "komisyon başabaş eşiğini yükseltmeli"
+# Komisyon, kazanç-kayıp makasını iki yönden birden daraltır
+beklenen_fark = 2 * config.ALPACA_FEE_RATE * 100 * (1 + config.TAKE_PROFIT_PCT)
+assert abs((config.TAKE_PROFIT_PCT * 100 - eko["net_win_pct"]) - beklenen_fark) < 0.01, \
+    (config.TAKE_PROFIT_PCT * 100 - eko["net_win_pct"], beklenen_fark)
+print(f"✓ Alpaca komisyonuyla: kazanç {eko['net_win_pct']:+.2f}% / "
+      f"kayıp {-eko['net_loss_pct']:.2f}% -> başabaş %{eko['breakeven_win_rate']:.1f}")
+
+# Dahili defter daha ucuz olduğu için eşiği de düşük — ikisi karıştırılmamalı
+eko_dahili = config.trade_economics(config.FEE_RATE)
+assert eko_dahili["breakeven_win_rate"] < eko["breakeven_win_rate"], \
+    "dahili defterin eşiği Alpaca'nınkinden düşük olmalı"
+assert "Alpaca" in config.summary()["Komisyon"], \
+    "panel yalnızca dahili oranı göstermemeli (yanıltıcı)"
+print(f"✓ iki arka ucun eşiği ayrı: dahili %{eko_dahili['breakeven_win_rate']:.1f} vs "
+      f"Alpaca %{eko['breakeven_win_rate']:.1f}")
+
 print("\nUYGULAMA KATMANI TESTLERİ GEÇTİ ✅")

@@ -10,6 +10,7 @@ Her ayar istersen ortam değişkeni (environment variable) ile de ezilebilir.
 
 import logging
 import os
+from typing import Optional
 
 # --------------------------------------------------------------------------
 # Yardımcı okuyucular (ortam değişkeni > varsayılan)
@@ -79,6 +80,10 @@ MAX_OPEN_POSITIONS = _env_int("MAX_OPEN_POSITIONS", 2)
 
 # Binance spot komisyonu (%0.1). Alışta ve satışta ayrı ayrı uygulanır.
 FEE_RATE = _env_float("FEE_RATE", 0.001)
+# Alpaca kripto komisyonu, dahili defterin varsayılanından ~2.5 kat yüksek.
+# Panelde ve --status'ta hangi arka uçtaysak ONUN oranı gösterilmeli; yoksa
+# sistem sana %0.1 derken gerçekte %0.245 ödüyorsun.
+ALPACA_FEE_RATE = _env_float("ALPACA_FEE_RATE", 0.00245)
 
 # --------------------------------------------------------------------------
 # 3) TAKİP EDİLEN PİYASALAR & STRATEJİ
@@ -320,6 +325,30 @@ DASHBOARD_AUTO_REFRESH = _env_bool("DASHBOARD_AUTO_REFRESH", True)
 RUN_BOT_IN_DASHBOARD = _env_bool("RUN_BOT_IN_DASHBOARD", True)
 
 
+def trade_economics(fee_rate: float, take_profit: Optional[float] = None,
+                    stop_loss: Optional[float] = None) -> dict:
+    """
+    Komisyon düşüldükten sonra bir işlemin gerçek getirisi.
+
+    Ham %2 kâr al / %1.5 zarar kes oranı "1.33'e 1 lehimize" gibi görünür, ama
+    komisyon iki yönden de kesilir: kazançtan düşer, kayba eklenir. Gerçek
+    rakamları ve başabaş kazanma oranını burada hesaplıyoruz — bu sayı
+    bilinmeden stratejinin kârlı olup olmadığı söylenemez.
+    """
+    tp = TAKE_PROFIT_PCT if take_profit is None else take_profit
+    sl = STOP_LOSS_PCT if stop_loss is None else stop_loss
+    giriş = 1.0 + fee_rate                                   # alışta ödenen
+    kazanç = (1.0 + tp) * (1.0 - fee_rate) - giriş
+    kayıp = giriş - (1.0 - sl) * (1.0 - fee_rate)
+    toplam = kazanç + kayıp
+    return {
+        "fee_rate": fee_rate,
+        "net_win_pct": kazanç * 100.0,
+        "net_loss_pct": kayıp * 100.0,
+        "breakeven_win_rate": (kayıp / toplam * 100.0) if toplam > 0 else float("nan"),
+    }
+
+
 def summary() -> dict:
     """Arayüzde göstermek için özet ayar sözlüğü."""
     return {
@@ -332,7 +361,8 @@ def summary() -> dict:
         + (f" (tolerans %{EMA_TOLERANCE_PCT * 100:g})" if EMA_TOLERANCE_PCT else ""),
         "Kâr al / Zarar kes": f"%{TAKE_PROFIT_PCT * 100:g} / %{STOP_LOSS_PCT * 100:g}",
         "Pozisyon büyüklüğü": f"%{POSITION_SIZE_PCT * 100:g} (maks {MAX_POSITION_USDT:,.0f} {QUOTE_CURRENCY})",
-        "Komisyon": f"%{FEE_RATE * 100:g}",
+        "Komisyon": (f"dahili %{FEE_RATE * 100:g} · "
+                     f"Alpaca kripto %{ALPACA_FEE_RATE * 100:g}"),
         "Döngü": f"{LOOP_INTERVAL_SECONDS} sn",
         "Motor": "panel içinde" if RUN_BOT_IN_DASHBOARD else "ayrı süreç (bot.py)",
         "Karar motoru": ("TradingAgents kurulu" if DECISION_ENGINE == "agents" else "kapalı (manuel)"),
